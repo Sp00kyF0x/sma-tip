@@ -2,16 +2,16 @@ name: TIP-Canary
 
 on:
   schedule:
-    # 22:16 Uhr deutscher Zeit: im Sommer (CEST = UTC+2) 20:16 UTC, im Winter
-    # (CET = UTC+1) 21:16 UTC. Der Schritt "Uhrzeit prüfen" lässt jeweils nur
+    # 22:17 Uhr deutscher Zeit: im Sommer (CEST = UTC+2) 20:17 UTC, im Winter
+    # (CET = UTC+1) 21:17 UTC. Der Schritt "Uhrzeit prüfen" lässt jeweils nur
     # den passenden Lauf durch.
-    - cron: "16 20 * * 1-5"
-    - cron: "16 21 * * 1-5"
+    - cron: "17 20 * * 1-5"
+    - cron: "17 21 * * 1-5"
   workflow_dispatch:   # manueller Start (Handy/Browser): "Run workflow"
 
 jobs:
   canary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -40,7 +40,6 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Pakete installieren
         if: steps.gate.outputs.run == 'true'
