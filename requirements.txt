@@ -1,0 +1,10 @@
+# Festgelegte Versionen (Stand 13.10.2026, entsprechen der lokalen Umgebung).
+# Beim bewussten Aktualisieren: Script laufen lassen und Ausgabe mit der
+# bisherigen vergleichen.
+pandas==3.0.5
+numpy==2.5.1
+pandas_market_calendars==5.4.0
+matplotlib==3.11.0   # nur für stats.py / backtest.py nötig
+# yfinance bewusst nur nach unten begrenzt: Yahoo ändert seine Schnittstelle
+# regelmäßig, ein starres Festlegen würde das Script irgendwann unbrauchbar machen.
+yfinance>=1.6.0
