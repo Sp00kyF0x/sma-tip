@@ -104,7 +104,7 @@ def build_message(text: str) -> tuple[str, str, int]:
         asset_short, asset_full = "Cash", "Cash"
     else:
         asset_short = info["target"][0]
-        asset_full = f"{info['target'][0]} - {info['target'][1]}"
+        asset_full = info["target"][1]
 
     changed = info["prev_state"] is not None and _two_state(info["prev_state"]) != regime
     title = f"Wechsel zu {regime}: {asset_short}" if changed else f"{regime}: {asset_short}"
