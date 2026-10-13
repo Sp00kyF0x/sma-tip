@@ -1,5 +1,5 @@
 """
-Schickt das Ergebnis eines canary.py-Laufs als Push-Nachricht über ntfy.
+Schickt das Ergebnis eines canary.py-Laufs als kurze Push-Nachricht über ntfy.
 
 Aufruf (siehe .github/workflows/canary.yml):
     python ntfy_push.py canary_output.txt
@@ -7,16 +7,22 @@ Aufruf (siehe .github/workflows/canary.yml):
 Das Thema (Topic) kommt aus der Umgebungsvariable NTFY_TOPIC (in GitHub
 als Secret hinterlegt). Optional: NTFY_SERVER (Standard https://ntfy.sh).
 
-Die Nachricht enthält:
-  - Titel: Regime bzw. "Regimewechsel: A -> B" (hohe Priorität), wenn sich
-    das Regime gegenüber dem Vortag der Signal-Historie geändert hat,
-  - den gewählten Ziel-Ticker (bei RISK/DEFENSIVE),
-  - Warnhinweise ([warn]-Zeilen der Ausgabe, z.B. Lauf vor dem Cutoff,
-    korrigierte Kurssprünge in den letzten Tagen),
-  - den Hinweis zu einem im Aufbau befindlichen Regimewechsel und das
-    FAZIT.
-ntfy erlaubt maximal ca. 4 KB pro Nachricht; die komplette Ausgabe steht
-im Protokoll des GitHub-Laufs.
+Die Werte werden aus der Textausgabe von canary.py gelesen (letzte Zeile
+der Signal-Historie, Zeile "Aktuell bestätigtes Regime", Markierung
+"<- heute gewählt", [warn]-Zeilen). Ändert sich das
+Ausgabeformat von canary.py, muss dieses Script angepasst werden; kann es
+die Ausgabe nicht lesen, bricht es ab (der Workflow meldet das per Push).
+
+Nachricht:
+  Titel:    "<Regime>: <Asset>", bei einem Regimewechsel
+            "Wechsel zu <Regime>: <Asset>" (hohe Priorität). Das Regime ist
+            nur RISK oder DEFENSIVE; Cash ist ein Asset der Defensiv-Seite.
+            Ein Wechsel liegt nur vor, wenn sich das Regime gegenüber dem
+            Vortag ändert (nicht bei DEFENSIVE <-> Cash).
+  Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung, Stand,
+            bei Bedarf Warnzeilen (z.B. Lauf vor dem Cutoff, korrigierter
+            Kurssprung).
+Die vollständige Ausgabe steht im Protokoll des GitHub-Laufs.
 """
 
 from __future__ import annotations
@@ -29,70 +35,90 @@ import urllib.request
 MAX_BYTES = 3900
 
 
+def _two_state(state: str) -> str:
+    """CASH ist ein Asset der Defensiv-Seite, kein eigenes Regime."""
+    return "RISK" if state == "RISK" else "DEFENSIVE"
+
+
+def _fmt_pct(text: str) -> str:
+    """'-2.13%' -> '-2,13 %' (Vorzeichen immer sichtbar, Komma)."""
+    value = float(text.strip().rstrip("%"))
+    return f"{value:+.2f}".replace(".", ",") + " %"
+
+
+def _fmt_date(iso: str) -> str:
+    y, m, d = iso.split("-")
+    return f"{d}.{m}.{y}"
+
+
 def parse_output(text: str) -> dict:
     lines = text.splitlines()
-    info: dict = {"regime": None, "stand": None, "target": None,
-                  "changed_from": None, "warnings": [], "hints": [], "fazit": []}
+    info: dict = {"state": None, "stand": None, "target": None,
+                  "prev_state": None, "tip": None, "gap": None,
+                  "warnings": []}
 
     for line in lines:
         m = re.match(r"Aktuell bestätigtes Regime \(Stand Schlusskurs ([\d-]+)\): (\w+)", line)
         if m:
-            info["stand"], info["regime"] = m.group(1), m.group(2)
+            info["stand"], info["state"] = m.group(1), m.group(2)
         if "<- heute gewählt" in line:
             m = re.match(r"\s*(\S+)\s+(.*?)\s{2,}", line)
             if m:
-                info["target"] = f"{m.group(1)} - {m.group(2)}"
+                info["target"] = (m.group(1), m.group(2))
         if line.startswith("[warn]"):
             info["warnings"].append(line)
-        if line.startswith("[Hinweis]"):
-            info["hints"].append(line)
 
-    # Regime der letzten beiden Zeilen der Signal-Historie
-    rows: list[str] = []
-    in_table = False
+    # Signal-Historie: Zeilen "DATUM | TIP-Mom  TIP best. | Abstand  SMA best. | Regime"
+    rows = []
     for line in lines:
-        if re.match(r"^-+\+-+", line):
-            in_table, rows = True, []
-            continue
-        if in_table:
-            if re.match(r"^\d{4}-\d{2}-\d{2} \|", line):
-                rows.append(line.rsplit("|", 1)[1].strip())
-            else:
-                in_table = False
-    if len(rows) >= 2 and rows[-1] != rows[-2]:
-        info["changed_from"] = rows[-2]
-
-    # FAZIT-Block: alles nach der zweiten "====="-Zeile
-    marks = [i for i, l in enumerate(lines) if l.startswith("=" * 20)]
-    if len(marks) >= 2:
-        info["fazit"] = [l for l in lines[marks[1] + 1:] if l.strip()]
+        if re.match(r"^\d{4}-\d{2}-\d{2} \|", line):
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) == 4:
+                rows.append((parts[1].split()[0], parts[2].split()[0], parts[3]))
+    if not rows:
+        raise ValueError("Signal-Historie in der Ausgabe nicht gefunden.")
+    info["tip"], info["gap"] = rows[-1][0], rows[-1][1]
+    if len(rows) >= 2:
+        info["prev_state"] = rows[-2][2]
     return info
+
+
+def _short_warning(line: str) -> str:
+    m = re.search(r"vor (\d\d:\d\d) Uhr", line)
+    if line.startswith("[warn] Es ist noch vor") and m:
+        return f"Achtung: Lauf vor {m.group(1)} Uhr, Stand ist der Vortag"
+    m = re.match(r"\[warn\]\s+(\S+): extremer Kurssprung am ([\d-]+)", line)
+    if m:
+        return f"Achtung: Kurssprung bei {m.group(1)} am {_fmt_date(m.group(2))} korrigiert"
+    return "Achtung: " + line[len("[warn]"):].strip()[:150]
 
 
 def build_message(text: str) -> tuple[str, str, int]:
     """Gibt (Titel, Nachricht, Priorität 1-5) zurück."""
     info = parse_output(text)
-    if info["regime"] is None:
+    if info["state"] is None:
         raise ValueError("Regime in der Ausgabe nicht gefunden - Lauf unvollständig?")
 
-    if info["changed_from"]:
-        title = f"Regimewechsel: {info['changed_from']} -> {info['regime']}"
-        priority = 4
+    regime = _two_state(info["state"])
+    if info["state"] == "CASH" or info["target"] is None:
+        asset_short, asset_full = "Cash", "Cash"
     else:
-        title = f"TIP-Canary: {info['regime']}"
-        priority = 3
+        asset_short = info["target"][0]
+        asset_full = f"{info['target'][0]} - {info['target'][1]}"
 
-    parts = [f"Regime: {info['regime']}  (Stand {info['stand']})"]
-    if info["target"]:
-        parts.append(f"Ziel: {info['target']}")
-    if info["warnings"]:
-        parts.append("\n" + "\n".join(info["warnings"]))
-    if info["hints"]:
-        parts.append("\n" + "\n".join(info["hints"]))
-    if info["fazit"]:
-        parts.append("\n" + "\n".join(info["fazit"]))
-    body = "\n".join(parts)
+    changed = info["prev_state"] is not None and _two_state(info["prev_state"]) != regime
+    title = f"Wechsel zu {regime}: {asset_short}" if changed else f"{regime}: {asset_short}"
+    priority = 4 if changed else 3
 
+    lines = [f"TIP: {_fmt_pct(info['tip'])}",
+             f"SMA: {_fmt_pct(info['gap'])}",
+             f"Regime: {regime}",
+             f"Empfehlung: {asset_full}",
+             f"Stand: {_fmt_date(info['stand'])}"]
+
+    lines += [_short_warning(w) for w in info["warnings"]]
+
+    body = "\n".join(lines)
     raw = body.encode("utf-8")
     if len(raw) > MAX_BYTES:
         body = raw[:MAX_BYTES].decode("utf-8", errors="ignore") + "\n[gekürzt - Details im GitHub-Protokoll]"
