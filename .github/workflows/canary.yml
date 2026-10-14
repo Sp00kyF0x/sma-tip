@@ -1,13 +1,11 @@
 name: TIP-Canary
 
+# Gestartet wird der Workflow von außen (cron-job.org, werktags 22:17 Uhr
+# deutscher Zeit) oder von Hand ("Run workflow"). Es gibt bewusst keinen
+# eigenen Zeitplan in GitHub: Die Zeiten dort sind nur in UTC angebbar und
+# werden von GitHub oft stark verzögert.
 on:
-  schedule:
-    # 22:17 Uhr deutscher Zeit: im Sommer (CEST = UTC+2) 20:17 UTC, im Winter
-    # (CET = UTC+1) 21:17 UTC. Der Schritt "Uhrzeit prüfen" lässt jeweils nur
-    # den passenden Lauf durch.
-    - cron: "17 20 * * 1-5"
-    - cron: "17 21 * * 1-5"
-  workflow_dispatch:   # manueller Start (Handy/Browser): "Run workflow"
+  workflow_dispatch:
 
 jobs:
   canary:
@@ -16,42 +14,21 @@ jobs:
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       PYTHONIOENCODING: utf-8
-      TZ: Europe/Berlin
     steps:
-      - name: Uhrzeit prüfen
-        id: gate
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          now=$(date +%H%M)
-          echo "Berliner Uhrzeit: $now"
-          if [ "$now" -ge 2215 ] && [ "$now" -le 2359 ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Nicht im Zeitfenster 22:15-23:59 - Lauf wird übersprungen."
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
 
       - name: Pakete installieren
-        if: steps.gate.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: canary.py ausführen
-        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: python canary.py | tee canary_output.txt
 
       - name: Push senden
-        if: steps.gate.outputs.run == 'true'
         run: python ntfy_push.py canary_output.txt
 
       - name: Fehler melden
