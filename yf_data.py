@@ -181,22 +181,25 @@ heitliche Kursreihen bei nur EINEM Abruf pro Aufruf von get_price_history():
      Punkt 2 NACH dieser Korrektur (auf der bereits durchgängigen
      Skala).
 
-Sicherer Auswertungszeitpunkt (SAFE_EVALUATION_TIME_BERLIN):
-  Vor 22:15 Uhr deutscher Zeit wird als Abfrage-Ende nur der letzte
-  VOLLSTÄNDIGE Handelstag verwendet (statt eines unfertigen
-  Intraday-Standes, siehe compute_query_end_date() - dafür benötigt
-  der Aufrufer weiterhin die aktuelle Berliner Zeit als Parameter,
-  z.B. für die Konsolenausgabe). Zusätzlich abgesichert durch
+Sicherer Auswertungszeitpunkt (SAFE_EVALUATION_TIME_NY):
+  Maßgeblich ist die New Yorker Zeit (NYSE/Nasdaq-Handelsschluss 16:00
+  Uhr Ortszeit): Vor 16:15 Uhr New Yorker Zeit wird als Abfrage-Ende nur
+  der letzte VOLLSTÄNDIGE Handelstag verwendet (statt eines unfertigen
+  Intraday-Standes, siehe compute_query_end_date()). Die Funktion
+  akzeptiert eine beliebige zeitzonenbehaftete aktuelle Zeit (z.B.
+  datetime.now(BERLIN_TZ)) und rechnet sie selbst nach New York um; das
+  gilt auch in den Wochen, in denen sich die Sommerzeit-Umstellungen
+  der USA und Europas unterscheiden. Zusätzlich abgesichert durch
   drop_unsafe_todays_bar() auf jeder von load_prices() gelieferten
   Kursreihe (entfernt den heutigen Balken, falls doch einer zurückkäme
-  und die Uhrzeit noch vor dem Cutoff liegt) - die dafür benötigte
-  aktuelle Berliner Zeit ermittelt load_prices() dabei selbst
+  und die New Yorker Uhrzeit noch vor dem Cutoff liegt) - die dafür
+  benötigte aktuelle Zeit ermittelt load_prices() dabei selbst
   (datetime.now(BERLIN_TZ)), der Aufrufer muss sie hierfür nicht
   übergeben.
 
 Verwendung in einem Skript:
     from yf_data import (
-        BERLIN_TZ, SAFE_EVALUATION_TIME_BERLIN,
+        BERLIN_TZ, NEW_YORK_TZ, SAFE_EVALUATION_TIME_NY,
         previous_business_day, compute_query_end_date,
         get_price_history, drop_unsafe_todays_bar, load_prices,
     )
@@ -239,7 +242,12 @@ except ImportError as exc:
 # ----------------------------------------------------------------------
 # Konfiguration (für alle drei Skripte identisch)
 # ----------------------------------------------------------------------
-SAFE_EVALUATION_TIME_BERLIN = dt_time(22, 15)
+# Frühester Zeitpunkt (New Yorker Ortszeit), ab dem der Schlusskurs des
+# heutigen Handelstags als final gilt: 15 Minuten nach dem US-Handelsschluss
+# um 16:00 Uhr. In deutscher Zeit entspricht das meist 22:15 Uhr, in den
+# Wochen mit abweichender Sommerzeit-Umstellung 21:15 Uhr.
+SAFE_EVALUATION_TIME_NY = dt_time(16, 15)
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 
 # Verzeichnis für die persistente, tickerweise Historie bereits
@@ -276,18 +284,24 @@ def previous_business_day(date: pd.Timestamp) -> pd.Timestamp:
     return d
 
 
-def compute_query_end_date(now_berlin: datetime) -> pd.Timestamp:
+def compute_query_end_date(now: datetime) -> pd.Timestamp:
     """Letzter Handelstag, bis zu dem Kurse abgefragt werden sollen
-    (siehe Modul-Docstring "Sicherer Auswertungszeitpunkt"):
+    (siehe Modul-Docstring "Sicherer Auswertungszeitpunkt"). `now` ist
+    die aktuelle, zeitzonenbehaftete Zeit (beliebige Zeitzone, z.B.
+    datetime.now(BERLIN_TZ)); ein naives Datum wird als Berliner Zeit
+    gelesen. Datum und Uhrzeit werden in New Yorker Zeit ausgewertet:
       - an Wochenenden gibt es ohnehin keinen aktuelleren Kurs ->
         letzter Freitag,
-      - unter der Woche vor SAFE_EVALUATION_TIME_BERLIN: der letzte
+      - unter der Woche vor SAFE_EVALUATION_TIME_NY: der letzte
         vollständige Handelstag (i.d.R. der Vortag),
-      - unter der Woche ab SAFE_EVALUATION_TIME_BERLIN: heute."""
-    today = pd.Timestamp(now_berlin.date())
+      - unter der Woche ab SAFE_EVALUATION_TIME_NY: heute."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BERLIN_TZ)
+    now_ny = now.astimezone(NEW_YORK_TZ)
+    today = pd.Timestamp(now_ny.date())
     if today.weekday() >= 5:
         return previous_business_day(today + pd.Timedelta(days=1))
-    if now_berlin.time() >= SAFE_EVALUATION_TIME_BERLIN:
+    if now_ny.time() >= SAFE_EVALUATION_TIME_NY:
         return today
     return previous_business_day(today)
 
@@ -996,18 +1010,21 @@ def get_price_history(ticker: str, start_date: pd.Timestamp,
 # ----------------------------------------------------------------------
 # Sicherheits-Cutoff für den heutigen (ggf. noch unfertigen) Kurs
 # ----------------------------------------------------------------------
-def drop_unsafe_todays_bar(adj_close: pd.Series, now_berlin: datetime) -> tuple[pd.Series, bool]:
+def drop_unsafe_todays_bar(adj_close: pd.Series, now: datetime) -> tuple[pd.Series, bool]:
     """Entfernt den letzten Eintrag aus `adj_close`, falls er vom
-    HEUTIGEN Berliner Kalendertag stammt UND die aktuelle Berliner
-    Uhrzeit vor SAFE_EVALUATION_TIME_BERLIN liegt. Sicherheitsnetz
-    zusätzlich zur Begrenzung des Abfrage-Enddatums in
+    HEUTIGEN Kalendertag (New Yorker Zeit) stammt UND die aktuelle New
+    Yorker Uhrzeit vor SAFE_EVALUATION_TIME_NY liegt. `now` ist die
+    aktuelle, zeitzonenbehaftete Zeit (naiv: Berliner Zeit).
+    Sicherheitsnetz zusätzlich zur Begrenzung des Abfrage-Enddatums in
     compute_query_end_date() (siehe Modul-Docstring). Gibt (bereinigte
     Serie, ob etwas verworfen wurde) zurück."""
     if adj_close.empty:
         return adj_close, False
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BERLIN_TZ)
+    now_ny = now.astimezone(NEW_YORK_TZ)
     last_date = adj_close.index[-1].date()
-    today_berlin = now_berlin.date()
-    if last_date == today_berlin and now_berlin.time() < SAFE_EVALUATION_TIME_BERLIN:
+    if last_date == now_ny.date() and now_ny.time() < SAFE_EVALUATION_TIME_NY:
         return adj_close.iloc[:-1], True
     return adj_close, False
 
@@ -1022,7 +1039,7 @@ def load_prices(ticker: str, start_date: pd.Timestamp,
     persistente Ticker-Historie und Börsenkalender-Vollständigkeits-
     prüfung mit Interpolation (Kalendername wird intern über
     calendar_for_ticker() ermittelt), sowie Sicherheits-Cutoff (siehe
-    drop_unsafe_todays_bar(), aktuelle Berliner Uhrzeit wird intern via
+    drop_unsafe_todays_bar(), aktuelle Zeit wird intern via
     datetime.now(BERLIN_TZ) ermittelt). Gibt (bereinigte Kursreihe, ob
     der heutige Balken verworfen wurde) zurück."""
     df = get_price_history(ticker, start_date, query_end_date)

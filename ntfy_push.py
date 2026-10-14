@@ -86,7 +86,7 @@ def parse_output(text: str) -> dict:
 def _short_warning(line: str) -> str:
     m = re.search(r"vor (\d\d:\d\d) Uhr", line)
     if line.startswith("[warn] Es ist noch vor") and m:
-        return f"Achtung: Lauf vor {m.group(1)} Uhr, Stand ist der Vortag"
+        return f"Achtung: Lauf vor {m.group(1)} Uhr New Yorker Zeit, Stand ist der Vortag"
     m = re.match(r"\[warn\]\s+(\S+): extremer Kurssprung am ([\d-]+)", line)
     if m:
         return f"Achtung: Kurssprung bei {m.group(1)} am {_fmt_date(m.group(2))} korrigiert"

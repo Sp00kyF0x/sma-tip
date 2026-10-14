@@ -126,23 +126,24 @@ Umfang der abgefragten Kursdaten:
       in Kalendertage umgerechnet und als Download-Startdatum verwendet
       werden (siehe DOWNLOAD_LOOKBACK_CALENDAR_DAYS).
   Als Enddatum der Abfrage gilt (siehe compute_query_end_date()):
-    - HEUTE (Berliner Kalendertag), falls SAFE_EVALUATION_TIME_BERLIN
-      bereits erreicht ist,
+    - HEUTE (Kalendertag in New Yorker Zeit), falls
+      SAFE_EVALUATION_TIME_NY bereits erreicht ist,
     - sonst der letzte Handelstag VOR heute (i.d.R. der Vortag).
 
 Sicherer Auswertungszeitpunkt (yfinance liefert am selben Tag VOR
 Börsenschluss einen unfertigen Intraday-Stand statt des Schlusskurses):
   Der reguläre Handelsschluss von NYSE/Nasdaq (TIP) liegt bei 16:00 Uhr
-  US-Ostküstenzeit, das entspricht je nach Sommer-/Winterzeit-Lage ca.
-  21:00-22:00 Uhr deutscher Zeit. SAFE_EVALUATION_TIME_BERLIN = 22:15 Uhr
-  ist ein Sicherheitspuffer. Wird das Script davor
-  ausgeführt, wird als Abfrage-Enddatum der letzte VOLLSTÄNDIGE
-  Handelstag verwendet (siehe compute_query_end_date()). Zusätzlich
-  verwirft load_prices() eine ggf. dennoch gelieferte unfertige heutige
-  Kurszeile. Die Regel gilt einheitlich für ALLE Ticker, auch für
-  Xetra-ETFs mit früherem Handelsschluss - das ist für diese unnötig
-  konservativ (ihre heutige Zeile wird erst am Folgeabend berücksichtigt),
-  aber harmlos und hält die Logik einheitlich.
+  New Yorker Zeit (meist 22:00 Uhr deutscher Zeit, in den Wochen mit
+  abweichender Sommerzeit-Umstellung 21:00 Uhr). Maßgeblich ist die New
+  Yorker Zeit: SAFE_EVALUATION_TIME_NY = 16:15 Uhr ist ein Sicherheits-
+  puffer. Wird das Script davor ausgeführt, wird als Abfrage-Enddatum
+  der letzte VOLLSTÄNDIGE Handelstag verwendet (siehe
+  compute_query_end_date()). Zusätzlich verwirft load_prices() eine ggf.
+  dennoch gelieferte unfertige heutige Kurszeile. Die Regel gilt
+  einheitlich für ALLE Ticker, auch für Xetra-ETFs mit früherem
+  Handelsschluss - das ist für diese unnötig konservativ (ihre heutige
+  Zeile wird erst am Folgeabend berücksichtigt), aber harmlos und hält
+  die Logik einheitlich.
 
 Währung:
   Es werden ausschließlich EUR-notierte Risk- und Defensiv-Ticker
@@ -173,7 +174,8 @@ except ImportError as exc:
 
 from yf_data import (
     BERLIN_TZ,
-    SAFE_EVALUATION_TIME_BERLIN,
+    NEW_YORK_TZ,
+    SAFE_EVALUATION_TIME_NY,
     compute_query_end_date,
     load_prices,
 )
@@ -552,16 +554,18 @@ def side_momenta(data: dict[str, dict], calendar: pd.DatetimeIndex) -> dict[str,
 # ----------------------------------------------------------------------
 def main() -> None:
     now_berlin = datetime.now(BERLIN_TZ)
-    cutoff_str = SAFE_EVALUATION_TIME_BERLIN.strftime("%H:%M")
-    print(f"Aktuelle Zeit (Berlin): {now_berlin.strftime('%Y-%m-%d %H:%M:%S')}")
+    now_ny = now_berlin.astimezone(NEW_YORK_TZ)
+    cutoff_str = SAFE_EVALUATION_TIME_NY.strftime("%H:%M")
+    print(f"Aktuelle Zeit: {now_berlin.strftime('%Y-%m-%d %H:%M:%S')} (Berlin) / "
+          f"{now_ny.strftime('%H:%M')} (New York)")
 
     query_end_date = compute_query_end_date(now_berlin)
-    if now_berlin.time() < SAFE_EVALUATION_TIME_BERLIN:
-        print(f"[warn] Es ist noch vor {cutoff_str} Uhr deutscher Zeit - es werden nur "
+    if now_ny.time() < SAFE_EVALUATION_TIME_NY:
+        print(f"[warn] Es ist noch vor {cutoff_str} Uhr New Yorker Zeit - es werden nur "
               f"Kurse bis {query_end_date.date()} (letzter vollständiger Handelstag) "
               f"abgefragt.")
     else:
-        print(f"[info] Nach {cutoff_str} Uhr deutscher Zeit - es werden Kurse bis "
+        print(f"[info] Nach {cutoff_str} Uhr New Yorker Zeit - es werden Kurse bis "
               f"heute ({query_end_date.date()}) abgefragt, falls bereits verfügbar.")
     print()
 
