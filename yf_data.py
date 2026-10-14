@@ -183,7 +183,7 @@ heitliche Kursreihen bei nur EINEM Abruf pro Aufruf von get_price_history():
 
 Sicherer Auswertungszeitpunkt (SAFE_EVALUATION_TIME_NY):
   Maßgeblich ist die New Yorker Zeit (NYSE/Nasdaq-Handelsschluss 16:00
-  Uhr Ortszeit): Vor 16:15 Uhr New Yorker Zeit wird als Abfrage-Ende nur
+  Uhr Ortszeit): Vor 16:05 Uhr New Yorker Zeit wird als Abfrage-Ende nur
   der letzte VOLLSTÄNDIGE Handelstag verwendet (statt eines unfertigen
   Intraday-Standes, siehe compute_query_end_date()). Die Funktion
   akzeptiert eine beliebige zeitzonenbehaftete aktuelle Zeit (z.B.
@@ -243,10 +243,10 @@ except ImportError as exc:
 # Konfiguration (für alle drei Skripte identisch)
 # ----------------------------------------------------------------------
 # Frühester Zeitpunkt (New Yorker Ortszeit), ab dem der Schlusskurs des
-# heutigen Handelstags als final gilt: 15 Minuten nach dem US-Handelsschluss
-# um 16:00 Uhr. In deutscher Zeit entspricht das meist 22:15 Uhr, in den
-# Wochen mit abweichender Sommerzeit-Umstellung 21:15 Uhr.
-SAFE_EVALUATION_TIME_NY = dt_time(16, 15)
+# heutigen Handelstags als final gilt: 5 Minuten nach dem US-Handelsschluss
+# um 16:00 Uhr. In deutscher Zeit entspricht das meist 22:05 Uhr, in den
+# Wochen mit abweichender Sommerzeit-Umstellung 21:05 Uhr.
+SAFE_EVALUATION_TIME_NY = dt_time(16, 5)
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 

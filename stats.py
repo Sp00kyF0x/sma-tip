@@ -197,7 +197,7 @@ Kursdaten-Abruf (kein Datei-Cache, siehe yf_data.py):
   Details, das ist kein CSV-Auswertungs-spezifisches Verhalten.
 
 Sicherer Auswertungszeitpunkt:
-  Vor SAFE_EVALUATION_TIME_NY (16:15 Uhr New Yorker Zeit, 15 Minuten
+  Vor SAFE_EVALUATION_TIME_NY (16:05 Uhr New Yorker Zeit, 5 Minuten
   nach dem US-Handelsschluss) wird als Abfrage-Ende nur der letzte
   VOLLSTÄNDIGE Handelstag verwendet (statt eines unfertigen
   Intraday-Standes), zusätzlich abgesichert durch
