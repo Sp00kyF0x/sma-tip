@@ -19,6 +19,11 @@ Nachricht:
             nur RISK oder DEFENSIVE; Cash ist ein Asset der Defensiv-Seite.
             Ein Wechsel liegt nur vor, wenn sich das Regime gegenüber dem
             Vortag ändert (nicht bei DEFENSIVE <-> Cash).
+            Börse geschlossen (Wochentag nach dem Cutoff, aber der letzte
+            Kurs ist nicht von heute, z.B. US-Feiertag): Titel
+            "Börse zu: <Regime>: <Asset>", niedrige Priorität, kein "Wechsel zu"
+            (der Stand ist der des letzten Handelstags, ein damaliger Wechsel
+            wurde schon gemeldet).
   Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung, Stand,
             bei Bedarf Warnzeilen (z.B. Lauf vor dem Cutoff, korrigierter
             Kurssprung).
@@ -31,6 +36,8 @@ import os
 import re
 import sys
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 MAX_BYTES = 3900
 
@@ -49,6 +56,27 @@ def _fmt_pct(text: str) -> str:
 def _fmt_date(iso: str) -> str:
     y, m, d = iso.split("-")
     return f"{d}.{m}.{y}"
+
+
+def _run_date_ny(text: str) -> datetime:
+    """Zeitpunkt des Laufs in New Yorker Zeit, gelesen aus der ersten Zeile von
+    canary.py ("Aktuelle Zeit: 2026-11-26 22:06:00 (Berlin) / ..."), sonst jetzt."""
+    m = re.search(r"Aktuelle Zeit: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \(Berlin\)", text)
+    ny = ZoneInfo("America/New_York")
+    if m:
+        berlin = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=ZoneInfo("Europe/Berlin"))
+        return berlin.astimezone(ny)
+    return datetime.now(ny)
+
+
+def _market_closed(info: dict, text: str) -> bool:
+    """Wochentag in New York, Lauf nach dem Cutoff, aber der Stand ist nicht
+    von heute -> heute gab es keinen Handel (Feiertag)."""
+    if info["stand"] is None or "[warn] Es ist noch vor" in text:
+        return False
+    run = _run_date_ny(text)
+    return run.weekday() < 5 and info["stand"] != run.date().isoformat()
 
 
 def parse_output(text: str) -> dict:
@@ -106,15 +134,21 @@ def build_message(text: str) -> tuple[str, str, int]:
         asset_short = info["target"][0]
         asset_full = info["target"][1]
 
-    changed = info["prev_state"] is not None and _two_state(info["prev_state"]) != regime
-    title = f"Wechsel zu {regime}: {asset_short}" if changed else f"{regime}: {asset_short}"
-    priority = 4 if changed else 3
+    closed = _market_closed(info, text)
+    changed = (not closed and info["prev_state"] is not None
+               and _two_state(info["prev_state"]) != regime)
+    if closed:
+        title, priority = f"Börse zu: {regime}: {asset_short}", 2
+    else:
+        title = f"Wechsel zu {regime}: {asset_short}" if changed else f"{regime}: {asset_short}"
+        priority = 4 if changed else 3
 
     lines = [f"TIP: {_fmt_pct(info['tip'])}",
              f"SMA: {_fmt_pct(info['gap'])}",
              f"Regime: {regime}",
              f"Empfehlung: {asset_full}",
-             f"Stand: {_fmt_date(info['stand'])}"]
+             f"Stand: {_fmt_date(info['stand'])}"
+             + (" (Börse geschlossen, keine neuen Kurse)" if closed else "")]
 
     lines += [_short_warning(w) for w in info["warnings"]]
 
