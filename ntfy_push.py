@@ -9,7 +9,7 @@ als Secret hinterlegt). Optional: NTFY_SERVER (Standard https://ntfy.sh).
 
 Die Werte werden aus der Textausgabe von canary.py gelesen (letzte Zeile
 der Signal-Historie, Zeile "Aktuell bestätigtes Regime", Zeile
-"Empfehlung:", Zeile "Risk-Phase seit", [warn]-Zeilen). Ändert sich das
+"Heute vorn:", Zeile "Risk-Phase seit", [warn]-Zeilen). Ändert sich das
 Ausgabeformat von canary.py, muss dieses Script angepasst werden; kann es
 die Ausgabe nicht lesen, bricht es ab (der Workflow meldet das per Push).
 
@@ -19,17 +19,19 @@ Nachricht:
   Titel:    "<Regime>: <Asset>", also "RISK: <Ticker>" oder "DEFENSIVE:
             Tagesgeld". Bei einem Regimewechsel "Wechsel zu <Regime>:
             <Asset>" (hohe Priorität). Ein Wechsel liegt nur vor, wenn
-            sich das Regime gegenüber dem Vortag ändert. Das Risk-Asset
-            wird zum Beginn der Risk-Phase gewählt und bis zum Phasenende
-            gehalten, innerhalb einer Phase ändert sich die Empfehlung
-            also nicht.
+            sich das Regime gegenüber dem Vortag ändert. Titel und
+            Empfehlung nennen den heutigen Spitzenreiter im Momentum
+            ("Heute vorn" in der Ausgabe von canary.py), nur zur
+            Information; er kann sich innerhalb einer Phase ändern. Das
+            tatsächlich gehaltene Asset (Wahl zum Phasenbeginn) steht nur
+            in der Ausgabe von canary.py.
             Börse geschlossen (Wochentag nach dem Cutoff, aber der letzte
             Kurs ist nicht von heute, z.B. US-Feiertag): Titel mit
             Präfix "Börse zu: ", niedrige Priorität, kein "Wechsel zu"
             (der Stand ist der des letzten Handelstags, ein damaliger Wechsel
             wurde schon gemeldet).
-  Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung,
-            bei RISK der Beginn der Risk-Phase, Stand, bei Bedarf
+  Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung
+            (bei RISK der Name des Assets, nicht der Ticker), bei RISK der Beginn der Risk-Phase, Stand, bei Bedarf
             Warnzeilen (z.B. Lauf vor dem Cutoff, korrigierter Kurssprung).
 Die vollständige Ausgabe steht im Protokoll des GitHub-Laufs.
 """
@@ -91,7 +93,7 @@ def parse_output(text: str) -> dict:
         m = re.match(r"Aktuell bestätigtes Regime \(Stand Schlusskurs ([\d-]+)\): (\w+)", line)
         if m:
             info["stand"], info["state"] = m.group(1), m.group(2)
-        m = re.match(r"Empfehlung: (\S+) \| (.+?)\s*$", line)
+        m = re.match(r"Heute vorn: (\S+) \| (.+?)\s*$", line)
         if m:
             info["target"] = (m.group(1), m.group(2))
         m = re.match(r"Risk-Phase (?:mindestens )?seit ([\d-]+)", line)
@@ -136,11 +138,11 @@ def build_message(text: str) -> tuple[str, str, int]:
     regime = info["state"]
     if regime == "RISK":
         if info["target"] is None:
-            raise ValueError("Empfehlung (Risk-Asset) in der Ausgabe nicht gefunden - Lauf unvollständig?")
+            raise ValueError("Zeile 'Heute vorn' (Risk-Asset) in der Ausgabe nicht gefunden - Lauf unvollständig?")
         asset_short, asset_full = info["target"]
         headline = f"RISK: {asset_short}"
         change_headline = f"Wechsel zu RISK: {asset_short}"
-        recommendation = f"{asset_short} ({asset_full})"
+        recommendation = asset_full
     else:
         headline = "DEFENSIVE: Tagesgeld"
         change_headline = "Wechsel zu DEFENSIVE: Tagesgeld"

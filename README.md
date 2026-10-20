@@ -75,8 +75,9 @@ unabhängig vom Regime, auch über Tagesgeld-Phasen hinweg.
   und liefert die Regime-Historie. Stufe 2 bestimmt daraus den Beginn der aktuellen Risk-Phase und lädt die Kandidaten ab
   einem Datum rund 252 Handelstage davor. Im Regime DEFENSIVE werden keine Kandidaten abgefragt.
 - **Auswahl zum Phasenbeginn:** Das Script leitet den Phasenbeginn bei jedem Lauf aus der Regime-Historie ab (kein
-  gespeicherter Zustand) und gibt als Empfehlung das Asset aus, das zu Phasenbeginn vorn lag. Die Momentum-Tabelle zeigt das
-  heutige Ranking nur zur Information; das gehaltene Asset ist markiert.
+  gespeicherter Zustand) und gibt als „Gehalten“ das Asset aus, das zu Phasenbeginn vorn lag. Daneben steht „Heute vorn“ (heutiger Spitzenreiter, nur zur
+  Information) und die Momentum-Tabelle mit beiden Markierungen. Die Push-Nachricht zeigt als „Empfehlung“ den heutigen Spitzenreiter
+  (Ticker im Titel, Name im Text), nicht das gehaltene Asset.
 - **Hebel:** Die Kandidaten werden ohne Hebel-Anpassung verglichen, der Pool enthält deshalb nur 2x-Produkte. Ein 1x-Produkt
   (z. B. `XDEM.DE`) wurde entfernt: In einem Test der Auswahl zu den Phasenbeginnen mit echten Kursen wurde es nach Crashs
   bevorzugt und kostete in der Erholung viel Rendite. Derselbe Test zeigte bei gleich gehebelten Kandidaten keinen belastbaren

@@ -628,10 +628,12 @@ def main() -> None:
 
     print(f"\nAktuell bestätigtes Regime (Stand Schlusskurs {today.date()}): {today_regime}")
 
-    # --- Empfehlung und Momentum-Übersicht der Risk-Kandidaten ---
+    # --- Gehaltenes Asset, heutiger Spitzenreiter und Momentum-Übersicht ---
     if today_regime == RISK:
         ticker, _, method = chosen
-        print(f"Empfehlung: {ticker} | {ALL_TICKER_NAMES[ticker]}")
+        leader = top_today[0]
+        print(f"Gehalten (Wahl zum Phasenbeginn): {ticker} | {ALL_TICKER_NAMES[ticker]}")
+        print(f"Heute vorn: {leader} | {ALL_TICKER_NAMES[leader]}")
         n_phase_days = int(((confirmed_position.index >= phase_start)).sum())
         since = f"seit {phase_start.date()} ({n_phase_days} Handelstag(e))"
         if phase_from_history_start:
@@ -639,16 +641,15 @@ def main() -> None:
         print(f"Risk-Phase {since}. Die Auswahl wird zum Phasenbeginn getroffen und bis zum "
               f"Phasenende gehalten (Methode: {method}).")
         markers = {ticker: "gehalten (Wahl zum Phasenbeginn)"}
-        if top_today[0] != ticker:
-            markers[top_today[0]] = "heute vorne"
+        markers[leader] = ("gehalten (Wahl zum Phasenbeginn) und heute vorne" if leader == ticker else "heute vorne")
         title = f"Momentum der Risk-Kandidaten heute ({today.date()})"
         if phase_from_history_start:
             title += " (Phasenbeginn nicht bestimmbar, ersatzweise Grundlage der Auswahl)"
         print_momentum_table(title, RISK_TICKERS, moms_today, markers)
-        if top_today[0] != ticker:
-            print(f"\nHinweis: Heute läge {top_today[0]} ({ALL_TICKER_NAMES[top_today[0]]}) "
-                  f"vorn. Gehalten würde trotzdem {ticker}: Die Auswahl zum Phasenbeginn "
-                  f"gilt bis zum Ende der Risk-Phase.")
+        if leader != ticker:
+            print(f"\nHinweis: Der heutige Spitzenreiter ({leader}) ist nur eine Information. "
+                  f"Gehalten wird {ticker}: Die Auswahl zum Phasenbeginn gilt bis zum Ende "
+                  f"der Risk-Phase.")
     else:
         print("Empfehlung: Tagesgeld")
 
