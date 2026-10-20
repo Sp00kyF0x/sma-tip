@@ -5,7 +5,7 @@ Backtest: Hybrid-Strategie (TIP-Canary + Nasdaq-100-SMA200), rein synthetisch
 Das Script rechnet DURCHGEHEND mit einem synthetischen S&P-500-Asset (SPY in
 EUR umgerechnet, ggf. gehebelt) - ohne reale ETF-Kurse und ohne Verkettung.
 Grund: Europäische ETFs werden um 17:30 (Xetra) bewertet, das Signal entsteht
-aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (kalibrierung_hebel.py)
+aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (gegen reale ETFs, Script entfernt)
 zeigt, dass am Xetra-Schluss nur ca. 60 % der US-Tagesbewegung eingepreist
 sind. Backtests mit realen ETFs sind deshalb optimistisch; der synthetische
 Kurs am US-Schluss entspricht einer Abend-Ausführung.
@@ -186,7 +186,7 @@ CANARY_TICKER = "TIP"   # iShares TIPS Bond ETF
 # 18MF.DE, Hauptfall; Finanzierung zum Euro-Zins), "USD" = Hebel nur auf den
 # Aktienindex, Wechselkurs 1x (wie DBPG.DE; Finanzierung zum US-Zins).
 LEVER_CURRENCY = "EUR"
-# Kalibrierte Parameter (kalibrierung_hebel.py, Lauf vom 2026-10-20): fixe Kosten
+# Kalibrierte Parameter (gegen reale ETFs, Lauf vom 2026-10-20, Script entfernt): fixe Kosten
 # p.a. bei Zinsdurchleitung 100 % und die FRED-Zinsreihe der Hebel-Finanzierung.
 LEVER_PARAMS = {
     "EUR": {"fixed_cost_pa": 0.0120, "funding_rate": "ECBDFR"},

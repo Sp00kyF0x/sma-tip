@@ -5,7 +5,7 @@ oder Tagesgeld gehalten werden soll. Das Repository enthält
 
 - das **Live-Signal** (`canary.py`), das nach US-Börsenschluss läuft und eine Push-Nachricht schickt,
 - einen **Backtest** mit deutscher Steuerlogik (`backtest.py`, rein synthetisch),
-- Werkzeuge für **Kalibrierung** und **Depotauswertung**.
+- ein Werkzeug für die **Depotauswertung**.
 
 > **Hinweis:** Dies ist ein Entscheidungshilfe-Projekt und keine Anlageberatung.
 > Alle Ergebnisse beruhen auf historischen Daten und einem vereinfachten Modell.
@@ -97,12 +97,14 @@ Im Backtest wirkt das Signal von Tag *d−1* an Tag *d* (kein Look-Ahead).
 Quelle: `backtest.py` (rein synthetisches S&P 500 aus SPY in EUR, Stand 20. Oktober 2026,
 Risk-off als Tagesgeld, Spreads und Steuern modelliert). Hauptfall: 2x-Hebel in EUR wie `18MF.DE`.
 
-| Variante | CAGR | Max. Drawdown | Sharpe |
+| Variante | CAGR | Max. Drawdown | Sortino |
 |---|---|---|---|
-| 2x TIPxSMA (Hybrid) | 23,1 % | −59,0 % | 0,79 |
-| 2x Buy & Hold | 17,6 % | −81,7 % | 0,61 |
-| 1x TIPxSMA (Hybrid) | 12,9 % | −32,3 % | 0,80 |
-| 1x Buy & Hold | 11,3 % | −51,4 % | 0,64 |
+| 2x TIPxSMA (Hybrid) | 23,1 % | −59,0 % | 1,11 |
+| 2x Buy & Hold | 17,6 % | −81,7 % | 0,86 |
+| 1x TIPxSMA (Hybrid) | 12,9 % | −32,3 % | 1,12 |
+| 1x Buy & Hold | 11,3 % | −51,4 % | 0,91 |
+
+Sortino = annualisierte Rendite geteilt durch die Abwärtsschwankung (nur Tage mit Verlust zählen als Risiko, ohne Risikofreizins gerechnet). Er passt besser zu einer Strategie, die gezielt Verluste vermeiden will, als der Sharpe-Wert, der auch Aufwärtsschwankungen bestraft. Der Sharpe-Wert steht weiter in der Ausgabe von `backtest.py`.
 
 **Sensitivitäten (CAGR des 2x-Hybrids, Vorsprung gegenüber Buy & Hold):**
 
@@ -150,7 +152,6 @@ für die Zukunft vorsichtiger sein als die Historie.
 | `canary.yml` | GitHub-Actions-Workflow (gehört nach `.github/workflows/canary.yml`): installiert Pakete, führt `canary.py` aus, sendet den Push und meldet Fehler. Wird extern gestartet (siehe Einrichtung). |
 | `yf_data.py` | Gemeinsame Kursdaten-Logik für alle Skripte: Abruf über yfinance mit Konsens-Abfrage, Kalender-Vollständigkeitsprüfung, Lückenfüllung aus zuvor bekannten Werten und Korrektur von Kurssprüngen. Kein Datei-Cache, damit rückwirkende Korrekturen von Yahoo ankommen. |
 | `backtest.py` | **Backtest** mit rein synthetischem S&P 500 (SPY in EUR, 1x und 2x) statt realer ETF-Kurse. Vermeidet den Zeitversatz zwischen Xetra-Schluss (17:30) und US-Signal (nur rund 60 % der US-Bewegung sind am Xetra-Schluss eingepreist). Kosten zeitvariabel: fixe Kosten + (Hebel − 1) × Zins (FRED), Hebelwährung in `LEVER_CURRENCY` umschaltbar (EUR wie 18MF.DE, USD wie DBPG.DE); Wechselkurs wird von Datenfehlern bereinigt. Risk-off-Phasen ohne Defensiv-Asset werden mit Tagesgeld verzinst (EZB-Einlagensatz abzüglich 0,25 %, nie unter 0 %, täglich nach Abgeltungsteuer). Enthält die deutsche Steuerlogik, die Jahres- und Phasen-Tabellen und Kennzahlen (CAGR, Drawdown, Sharpe, Capture) für Hybrid, nur TIP und nur SMA gegen Buy & Hold, jeweils 1x und 2x. Konfiguration der Kosten und Datenbereinigung steht im Kopf der Datei. |
-| `kalibrierung_hebel.py` | **Kalibrierung des synthetischen Hebel-Modells**: vergleicht SPY (nach EUR umgerechnet, täglich gehebelt) mit 18MF.DE, DBPG.DE (je 2x) sowie SXR8.DE und SXR4.DE (je 1x) und schätzt daraus die fixen Kosten p.a. und die Zinssensitivität (Kosten = fix + (Hebel − 1) × Zins, Zinsreihen von FRED). Testet außerdem, ob der ETF den Wechselkurs mithebelt, misst den Zeitversatz zum US-Schluss und bereinigt eintägige Ausreißer im Wechselkurs. Ergebnis in `kalibrierung/`. TER-Angaben im Kopf der Datei bitte mit den Factsheets abgleichen. |
 | `stats.py` | **Depotauswertung:** liest CSV-Exporte der eigenen Käufe und Verkäufe (`stats/*.csv`), rekonstruiert den Bestand, berechnet Rendite und vergleicht mit Buy-&-Hold-Referenzen inklusive Vorabpauschale. Erzeugt `results.txt` und Plots. |
 | `example.csv` | Beispiel für das CSV-Format von `stats.py` (`date;action;ticker;shares;sum`, Semikolon, Dezimalkomma). |
 | `requirements.txt` | Festgelegte Paketversionen. `yfinance` ist bewusst nur nach unten begrenzt, weil Yahoo seine Schnittstelle regelmäßig ändert. |
@@ -162,7 +163,7 @@ für die Zukunft vorsichtiger sein als die Historie.
 - **`backtest.py`:** Das Risk-Asset ist durchgehend synthetisch: `SPY` (angepasster Schlusskurs,
   enthält Dividenden), in EUR umgerechnet (Wechselkurs `EUR=X`, eintägige Datenfehler bereinigt) und gehebelt.
   Keine realen ETF-Kurse und keine Verkettung. Kosten zeitvariabel, kalibriert gegen die realen Fonds ab 2011
-  (`kalibrierung_hebel.py`): Tagesrendite = Brutto − (fixe Kosten + (Hebel − 1) × Zins) / 252.
+  (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE; Kalibrierungs-Script entfernt): Tagesrendite = Brutto − (fixe Kosten + (Hebel − 1) × Zins) / 252.
   **1x:** 0,25 % fix (iShares S&P 500). **2x, Hauptfall (EUR-Hebel wie `18MF.DE`):** 1,20 % fix + Euro-Zins (EZB-Einlagensatz,
   FRED `ECBDFR`), Zinsdurchleitung 97 %. **2x, Sensitivität (USD-Hebel wie `DBPG.DE`):** 1,58 % fix + US-Zins (`DFF`).
   Die 1,20 % enthalten rund 0,4 bis 0,5 PP Indexlücke MSCI USA gegen S&P 500 und sind auf SPY-Basis konservativ.
