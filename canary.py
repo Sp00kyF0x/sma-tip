@@ -3,25 +3,25 @@ TIP-Canary-Signal: Aktuelle Lage & Handlungsempfehlung
 ========================================================
 
 Kein Backtest, keine Steuer-/Performance-Simulation, keine Plots/CSV-
-Exporte. Das Script:
+Exporte. Das Script arbeitet in zwei Stufen:
 
-  1. Lädt die aktuellen Kursdaten für das Canary-Asset (TIP) sowie
-     beliebig viele Risk- und Defensiv-Kandidaten-Ticker - beschränkt
-     auf das tatsächlich benötigte Zeitfenster (siehe "Umfang der
-     abgefragten Kursdaten"). Der Abruf inkl. Konsens-Abfrage,
-     Kalender-Vollständigkeitsprüfung und Kurssprung-Korrektur läuft
-     über yf_data.py (siehe dortiger Docstring).
-  2. Berechnet das TIP-13612U-Momentum (Handelstage-Methode) und das
-     NDX-SMA200-Trendsignal, filtert beide getrennt (Whipsaw) und
-     kombiniert sie zur Hybrid-Logik (siehe unten) zum Regime
-     RISK / DEFENSIVE / CASH.
-  3. Wählt bei jedem Lauf automatisch den Kandidaten mit dem besten
-     Momentum aus der zum aktuellen Regime passenden Ticker-Liste.
-  4. Zeigt die Signal-Historie der letzten 10 Handelstage (TIP-Signal,
-     Abstand des NDX-Kurses zur SMA200, SMA-Signal, Hybrid-Regime).
-  5. Gibt am Ende ein kurzes Fazit: das aktuell bestätigte Regime, welche
-     der beiden Signale es tragen, und ein Hinweis, falls ein Regime-
-     Wechsel im Aufbau ist.
+  Stufe 1 - Signal-Assets:
+    Lädt TIP (Canary) und ^NDX (Trend) über eine lange Historie
+    (REGIME_HISTORY_YEARS plus Einlaufzeit), berechnet das TIP-13612U-
+    Momentum und das NDX-SMA200-Trendsignal, filtert beide getrennt
+    (Whipsaw) und kombiniert sie zur Hybrid-Logik (siehe unten) zum
+    Regime RISK / DEFENSIVE - für JEDEN Tag der Historie.
+  Stufe 2 - Risk-Assets (nur im Regime RISK):
+    Aus der Regime-Historie wird der Beginn der aktuellen Risk-Phase
+    bestimmt. Erst dann werden die Kurse der Kandidaten geladen (ab einem
+    Datum so weit vor dem Phasenbeginn, dass das 13612U-Momentum dort
+    berechenbar ist) und der Kandidat zum PHASENBEGINN ausgewählt. Im
+    Regime DEFENSIVE werden keine Kandidaten abgefragt und kein Momentum
+    berechnet.
+  Danach: Signal-Historie der letzten 10 Handelstage (TIP-Signal, Abstand
+  des NDX-Kurses zur SMA200, SMA-Signal, Hybrid-Regime) und ein kurzes
+  Fazit mit dem aktuell bestätigten Regime, den tragenden Signalen und
+  einem Hinweis, falls ein Regime-Wechsel im Aufbau ist.
 
 Hybrid-Logik (TIP + SMA):
   Zwei Signale, jedes mit eigenem Bestätigungsfilter:
@@ -34,80 +34,74 @@ Hybrid-Logik (TIP + SMA):
       TIP-Kalender vorwärtsgefüllt.
   Regime = RISK, sobald MINDESTENS EINES der beiden bestätigten Signale
   RISK meldet (ODER-Verknüpfung). Nur wenn beide nicht RISK melden, gilt
-  die Defensiv-Seite: DEFENSIVE oder CASH, wie bisher entschieden über den
-  besten Defensiv-Score (> 0 -> DEFENSIVE, sonst CASH). Das entspricht dem
-  Modus "hybrid" in backtest.py.
+  das Regime DEFENSIVE. Das gehaltene Asset ist dann ausschließlich
+  Tagesgeld. Das entspricht dem Modus "hybrid" in backtest.py.
 
-Mehrere Kandidaten pro Seite (RISK_TICKERS / DEFENSIVE_TICKERS):
-  Beide Listen können einen oder mehrere Ticker enthalten. Das
-  Makro-Regime (RISK vs. "Defensiv-Seite", d.h. Defensiv-ETF oder Cash)
-  wird ausschließlich von den Makro-Signalen (TIP-Canary und Trend-SMA,
-  siehe Hybrid-Logik) bestimmt - die Kandidaten
-  selbst haben keinen Einfluss darauf. Erst INNERHALB des aktiven
-  Regimes wird nach derselben Methode für beide Seiten ausgewählt (siehe
-  select_best_candidate()): der Kandidat der jeweiligen Liste mit dem
-  höchsten Momentum (reine relative Auswahl, kein Schwellenwert).
-  Die Momentum-Länge wird absteigend geprüft (13612U, 136U, 13U, 1U):
-  Hat mindestens ein Kandidat der Liste einen Wert der jeweiligen Länge
-  (13612U erst ab 252 Handelstagen Historie), gewinnt unter den
-  Kandidaten MIT Wert der höchste; Kandidaten mit zu kurzer Historie
-  nehmen am Vergleich dann nicht teil (bleiben aber in der Tabelle
-  sichtbar). Hat kein Kandidat einen Wert, wird die nächstkürzere Länge
-  geprüft. Geht auch 1U für keinen Kandidaten, wird der Kandidat mit der
-  LÄNGSTEN verfügbaren Kurshistorie gewählt (kein Momentum-Vergleich
-  mehr möglich).
-    Die Momentum-Tabellen sortieren die Kandidaten nach derselben Logik:
-  zuerst alle mit 13612U-Wert (absteigend nach 13612U), darunter die mit
-  136U-Wert (absteigend nach 136U), dann 13U, dann 1U; Kandidaten ganz
-  ohne Wert stehen am Ende. Der gewählte Kandidat steht damit oben.
-    Ob überhaupt die Defensiv-Seite (statt CASH) aktiv ist, wird
-  getrennt entschieden: der nach derselben Methode ermittelte beste
-  Score aller Defensiv-Kandidaten wird je Tag gegen 0 geprüft (siehe
-  raw_target_position(), defensive_mom_best) - nur bei einem positiven
-  besten Score gilt die Defensiv-Seite als aktiv, sonst CASH.
-    Die Kandidatenauswahl ist nicht an eine Regime-Phase gebunden,
-  sondern folgt bei jedem Lauf den heutigen Momentum-Werten. Ob und wann
-  tatsächlich umgeschichtet wird, liegt vollständig beim Nutzer.
+Mehrere Kandidaten für die Risk-Seite (RISK_TICKERS):
+  Das Makro-Regime wird ausschließlich von den beiden Signalen bestimmt -
+  die Kandidaten haben darauf keinen Einfluss. Erst INNERHALB einer
+  Risk-Phase wird ausgewählt (siehe select_best_candidate()): der
+  Kandidat mit dem höchsten 13612U-Momentum (reine relative Auswahl, kein
+  Schwellenwert). Die Momentum-Länge wird absteigend geprüft (13612U,
+  136U, 13U, 1U): Hat mindestens ein Kandidat einen Wert der jeweiligen
+  Länge, gewinnt unter den Kandidaten MIT Wert der höchste; Kandidaten
+  mit zu kurzer Historie nehmen am Vergleich dann nicht teil (bleiben
+  aber in der Tabelle sichtbar). Hat kein Kandidat einen Wert, wird die
+  nächstkürzere Länge geprüft. Geht auch 1U für keinen Kandidaten, wird
+  der Kandidat mit der LÄNGSTEN verfügbaren Kurshistorie gewählt.
+    Die Momentum-Tabelle sortiert die Kandidaten nach derselben Logik
+  (zuerst alle mit 13612U-Wert absteigend, dann 136U, 13U, 1U; ohne Wert
+  am Ende). Der gewählte Kandidat steht damit oben.
+    Hinweis zum Hebel: Die Kandidaten werden ohne Hebel-Anpassung direkt
+  verglichen. Der Pool sollte deshalb nur gleich gehebelte Produkte
+  enthalten (aktuell nur 2x): Ein 1x-Produkt würde nach einem Crash vom
+  Momentum bevorzugt und kostet dann in der Erholung Rendite. Ein Test der
+  Auswahlmethoden (Risk-Tage-Momentum gegen Kalender-Momentum) zeigte bei
+  gleich gehebelten Kandidaten keinen belastbaren Unterschied, daher wird
+  die einfachere Kalender-Methode verwendet.
 
-13612U-Momentum - Handelstage-Methode (Canary, Risk- und Defensiv-
-Kandidaten):
+Auswahl zum Phasenbeginn (statt täglich):
+  Die Kandidatenauswahl gilt für die gesamte Risk-Phase. Das Script
+  bestimmt aus der Regime-Historie den ersten Tag der aktuellen
+  bestätigten Risk-Phase und berechnet das Ranking so, wie es an diesem
+  Tag war (nur Daten bis zu diesem Tag). Das ist dieselbe Annahme wie im
+  Backtest (Wahl zu Beginn der Phase, Halten bis zum Phasenende) und
+  vermeidet Umschichtungen innerhalb der Phase. Das Script braucht dafür
+  keinen gespeicherten Zustand: Die Auswahl wird bei jedem Lauf aus der
+  Historie neu abgeleitet. Das heutige Ranking wird zusätzlich nur zur
+  Information gezeigt. Läuft die Phase schon am Beginn der Regime-
+  Historie, ist der echte Beginn nicht bestimmbar; dann gilt ersatzweise
+  das heutige Ranking (mit Warnung).
+
+13612U-Momentum - Handelstage-Methode (TIP und Risk-Kandidaten):
   Score(t) = 1/4 * [ (P0/P1-1) + (P0/P3-1) + (P0/P6-1) + (P0/P12-1) ],
   wobei P1/P3/P6/P12 die Kurse 21/63/126/252 Handelstage ZUVOR in der
-  EIGENEN Kurshistorie des jeweiligen Tickers sind (Series.shift(n),
-  keine Kalenderlogik). Fallback bei zu kurzer Historie: 136U-Momentum,
-  also dieselbe Formel mit den Komponenten 1/3/6 Monate (21/63/126
-  Handelstage), siehe momentum_136u(). Die Momentum-Übersichtstabellen
-  zeigen zusätzlich die Teilkomponenten 1U und 13U (1- bzw. 1+3-Monats-
-  Momentum); diese dienen ebenfalls als weitere Fallback-Stufen der
-  Kandidatenauswahl (13612U -> 136U -> 13U -> 1U -> längste Historie).
+  EIGENEN Kurshistorie des jeweiligen Tickers sind (keine Kalenderlogik).
+  136U, 13U und 1U nutzen die ersten drei, zwei bzw. eine Komponente.
+  Das Momentum der Kandidaten ist unabhängig vom Regime (normale Kurse,
+  auch über Tagesgeld-Phasen hinweg).
 
 Kalender:
   Das Canary-Signal (Momentum, Rohsignal, Bestätigungsfilter) läuft
-  vollständig auf dem eigenen Handelskalender von TIP (NYSE). Die
-  Momentum-Werte der Risk- und Defensiv-Kandidaten werden auf deren
-  eigenem Kalender berechnet und anschließend auf den TIP-Kalender
-  vorwärtsgefüllt: an einem Tag, an dem die Börse eines Kandidaten
-  geschlossen ist, gilt sein zuletzt bekannter Wert.
+  vollständig auf dem eigenen Handelskalender von TIP (NYSE). Die Risk-
+  Kandidaten laufen auf ihrem eigenen Kalender.
 
 Whipsaw-/Bestätigungsfilter (Makro-Regime):
   Ein neuer Rohsignal-Wert wird erst nach mehreren aufeinanderfolgenden
   Handelstagen mit demselben (abweichenden) Wert als "bestätigt"
   übernommen - mit zwei getrennten Fenstern je Richtung:
     CONFIRMATION_A = 1  - Handelstage, die nötig sind für einen Wechsel
-                          WEG von RISK (zu DEFENSIVE oder CASH)
+                          WEG von RISK (zu DEFENSIVE)
     CONFIRMATION_B = 2  - Handelstage, die nötig sind für einen Wechsel
                           HIN ZU RISK
-  Für einen Wechsel zwischen DEFENSIVE und CASH gilt ebenfalls
-  CONFIRMATION_A, da auch dieser Wechsel nicht "hin zu RISK" führt (siehe
-  apply_confirmation_filter()). Für das Trend-Signal gelten die eigenen
-  Fenster TREND_CONFIRMATION_A / TREND_CONFIRMATION_B (1 / 1). Die
-  Signal-Tabelle zeigt das bestätigte Signal beider Zweige sowie das
-  daraus kombinierte Regime je Tag. Zusätzlich
-  wird ausgegeben, falls sich ein Regimewechsel im Aufbau befindet (z.B.
-  "seit 1 Tag abweichend, noch 1 weitere Bestätigung nötig"). Ein im
-  Aufbau befindlicher Signalwechsel, der das Hybrid-Regime nicht ändern
-  würde (das andere Signal hält RISK), löst keinen Regime-Hinweis aus, wird
-  aber im Fazit beim jeweiligen Signal vermerkt.
+  Für das Trend-Signal gelten die eigenen Fenster TREND_CONFIRMATION_A /
+  TREND_CONFIRMATION_B (1 / 2). Die Signal-Tabelle zeigt das bestätigte
+  Signal beider Zweige sowie das daraus kombinierte Regime je Tag.
+  Zusätzlich wird ausgegeben, falls sich ein Regimewechsel im Aufbau
+  befindet (z.B. "seit 1 Tag abweichend, noch 1 weitere Bestätigung
+  nötig"). Ein im Aufbau befindlicher Signalwechsel, der das Hybrid-Regime
+  nicht ändern würde (das andere Signal hält RISK), löst keinen Regime-
+  Hinweis aus, wird aber im Fazit beim jeweiligen Signal vermerkt.
 
 Timing:
   Das mit dem HEUTIGEN Schlusskurs bestätigte Regime ist die
@@ -116,15 +110,15 @@ Timing:
   (siehe "Sicherer Auswertungszeitpunkt").
 
 Umfang der abgefragten Kursdaten:
-    - Für die 13612U-Formel werden maximal 252 Handelstage Historie VOR
-      dem jeweiligen Bewertungstag benötigt (LOOKBACK_DAYS[-1]); der
-      SMA200 des Trend-Signals braucht 200 Handelstage (inkl. heute).
-    - Zusätzlich sollen die letzten DISPLAY_LAST_N_DAYS=10 Handelstage
-      in der Signal-Historie mit vollständigem Momentum gezeigt werden.
-    - Zusammen sind das TRADING_DAYS_NEEDED = 252 + 10 = 262
-      Handelstage, die großzügig (siehe CALENDAR_DAYS_PER_TRADING_DAY)
-      in Kalendertage umgerechnet und als Download-Startdatum verwendet
-      werden (siehe DOWNLOAD_LOOKBACK_CALENDAR_DAYS).
+    - Stufe 1 (TIP, ^NDX): REGIME_HISTORY_YEARS Jahre Regime-Historie
+      PLUS die Einlaufzeit für die Signale (252 Handelstage für das
+      13612U, 200 für den SMA200) und DISPLAY_LAST_N_DAYS=10 Handelstage
+      für die Signal-Historie, großzügig (CALENDAR_DAYS_PER_TRADING_DAY)
+      in Kalendertage umgerechnet. Es ist je Ticker nur ein Abruf, die
+      Datenmenge ist klein.
+    - Stufe 2 (Risk-Kandidaten, nur im Regime RISK): ab dem Auswahltag
+      minus der Einlaufzeit für das 13612U (252 Handelstage, großzügig in
+      Kalendertage umgerechnet).
   Als Enddatum der Abfrage gilt (siehe compute_query_end_date()):
     - HEUTE (Kalendertag in New Yorker Zeit), falls
       SAFE_EVALUATION_TIME_NY bereits erreicht ist,
@@ -146,11 +140,11 @@ Börsenschluss einen unfertigen Intraday-Stand statt des Schlusskurses):
   die Logik einheitlich.
 
 Währung:
-  Es werden ausschließlich EUR-notierte Risk- und Defensiv-Ticker
-  konfiguriert, eine Währungsumrechnung ist daher nicht nötig. Für das
-  Canary-Asset TIP (USD) ist die Währung irrelevant, da nur das
-  Kursverhältnis P0/Pn in die Momentum-Formel eingeht. Gleiches gilt für
-  den Trend-Index ^NDX (USD): nur das Verhältnis Kurs/SMA zählt.
+  Es werden ausschließlich EUR-notierte Risk-Ticker konfiguriert, eine
+  Währungsumrechnung ist daher nicht nötig. Für das Canary-Asset TIP
+  (USD) ist die Währung irrelevant, da nur das Kursverhältnis P0/Pn in
+  die Momentum-Formel eingeht. Gleiches gilt für den Trend-Index ^NDX
+  (USD): nur das Verhältnis Kurs/SMA zählt.
 
 Hinweis: Bitte prüfen, dass die Kurshistorien der konfigurierten Ticker
 das abbilden, was Tickername/ISIN vermuten lassen.
@@ -201,63 +195,64 @@ RISK_TICKERS = {
     "18MF.DE": "Amundi MSCI USA (2x)",
     "LVWC.DE": "Amundi MSCI World (2x)",
     "SC2X.DE": "Scalable MSCI ACWI (2x)",
-    "L8I7.DE": "Amundi Nasdaq-100 (2x)",
-    "XDEM.DE": "Xtrackers MSCI World Momentum",
 }
-DEFENSIVE_TICKERS = {
-    "FTGB.SG": "First Trust FactorFX",
-    "FXEU.AS": "First Trust FactorFX (EUR hedged)",
-    "LYOR.DE": "Amundi Smart Overnight Return",
-}
+
+# Zustände des Regimes. Im Regime DEFENSIVE wird ausschließlich Tagesgeld gehalten.
+RISK = "RISK"
+DEFENSIVE = "DEFENSIVE"
 
 # Ticker -> Anzeigename über alle konfigurierten Ticker (nur Ausgabe).
 ALL_TICKER_NAMES: dict[str, str] = {CANARY_TICKER: CANARY[CANARY_TICKER],
                                     TREND_TICKER: TREND[TREND_TICKER],
-                                    **RISK_TICKERS, **DEFENSIVE_TICKERS}
+                                    **RISK_TICKERS}
 
-# Lookbacks (Handelstage) für den 13612U-Score (Canary, Risk- und
-# Defensiv-Kandidaten) sowie den 136U-Fallback bei zu kurzer Historie.
+# Lookbacks (Handelstage) für den 13612U-Score von TIP und den Risk-
+# Kandidaten. 136U/13U/1U nutzen die ersten drei/zwei/eine Komponente.
 LOOKBACK_DAYS = (21, 63, 126, 252)
-LOOKBACK_136U_DAYS = (21, 63, 126)
 
 # Whipsaw-/Bestätigungsfenster (Handelstage) des TIP-Canary-Makrosignals,
 # getrennt je Wechselrichtung (siehe Modul-Docstring).
-CONFIRMATION_A = 1  # weg von RISK (-> DEFENSIVE/CASH)
+CONFIRMATION_A = 1  # weg von RISK (-> DEFENSIVE)
 CONFIRMATION_B = 2  # hin zu RISK
 
 # Trend-Signal (SMA) der Hybrid-Logik: SMA-Länge in Handelstagen und
 # eigene Bestätigungsfenster (gleiche Bedeutung wie oben).
 TREND_SMA_DAYS = 200
 TREND_CONFIRMATION_A = 1  # weg von RISK
-TREND_CONFIRMATION_B = 1  # hin zu RISK
+TREND_CONFIRMATION_B = 2  # hin zu RISK
 
 # Anzahl der zuletzt angezeigten Tage in der Signal-Historie.
 DISPLAY_LAST_N_DAYS = 10
 
-# Umfang der abgefragten Kursdaten (siehe Docstring): 252 Handelstage
-# Lookback für die 13612U-Formel (bzw. die SMA-Länge, falls größer) +
-# DISPLAY_LAST_N_DAYS Handelstage, damit auch für die angezeigte
-# Signal-Historie überall ein vollständiges Momentum bzw. ein SMA-Wert
-# vorliegt. Großzügig (Faktor 1.6 + Puffer) in Kalendertage umgerechnet,
-# um Wochenenden/Feiertage abzudecken.
+# Stufe 1: Einlaufzeit der Signale (252 Handelstage 13612U bzw. SMA-Länge,
+# falls größer) + DISPLAY_LAST_N_DAYS, großzügig (Faktor 1.6 + Puffer) in
+# Kalendertage umgerechnet, um Wochenenden/Feiertage abzudecken.
 TRADING_DAYS_NEEDED = max(LOOKBACK_DAYS[-1], TREND_SMA_DAYS) + DISPLAY_LAST_N_DAYS  # 262
 CALENDAR_DAYS_PER_TRADING_DAY = 1.6
-DOWNLOAD_LOOKBACK_CALENDAR_DAYS = int(TRADING_DAYS_NEEDED * CALENDAR_DAYS_PER_TRADING_DAY) + 30
+WARMUP_CALENDAR_DAYS = int(TRADING_DAYS_NEEDED * CALENDAR_DAYS_PER_TRADING_DAY) + 30
 
-# Maximale Breite der Namensspalte in den Momentum-Tabellen; längere
-# Namen werden mit "…" gekürzt.
+# Länge der Regime-Historie NACH der Einlaufzeit in Jahren. Sie muss den
+# Beginn der aktuellen Risk-Phase enthalten.
+REGIME_HISTORY_YEARS = 10
+REGIME_HISTORY_CALENDAR_DAYS = WARMUP_CALENDAR_DAYS + int(REGIME_HISTORY_YEARS * 365.25)
+
+# Stufe 2: Die Kandidaten werden ab dem Auswahltag minus dieser Einlaufzeit
+# geladen (252 Handelstage für das 13612U plus Puffer, in Kalendertage).
+CANDIDATE_WARMUP_CALENDAR_DAYS = int((LOOKBACK_DAYS[-1] + 1) * CALENDAR_DAYS_PER_TRADING_DAY) + 30
+
+# Maximale Breite der Namensspalte in der Momentum-Tabelle; längere Namen
+# werden mit "…" gekürzt.
 MOM_TABLE_NAME_COL_MAX = 34
 
 
 # ----------------------------------------------------------------------
-# Kursdaten je Ticker laden (begrenztes Zeitfenster, siehe Docstring)
+# Kursdaten je Ticker laden
 # ----------------------------------------------------------------------
-def load_ticker(ticker: str, query_end_date: pd.Timestamp) -> dict:
-    """Lädt die Kurshistorie eines Tickers für das Zeitfenster
-    DOWNLOAD_LOOKBACK_CALENDAR_DAYS über yf_data.load_prices() (inkl.
-    Konsens-Abfrage, Vollständigkeitsprüfung gegen den Börsenkalender
-    und Verwerfen eines unfertigen heutigen Kurses)."""
-    start_date = query_end_date - pd.Timedelta(days=DOWNLOAD_LOOKBACK_CALENDAR_DAYS)
+def load_ticker(ticker: str, start_date: pd.Timestamp, query_end_date: pd.Timestamp) -> dict:
+    """Lädt die Kurshistorie eines Tickers von `start_date` bis
+    `query_end_date` über yf_data.load_prices() (inkl. Konsens-Abfrage,
+    Vollständigkeitsprüfung gegen den Börsenkalender und Verwerfen eines
+    unfertigen heutigen Kurses)."""
     safe, dropped = load_prices(ticker, start_date, query_end_date)
     return {"ticker": ticker, "prices": safe, "dropped_today": dropped}
 
@@ -266,39 +261,39 @@ def load_ticker(ticker: str, query_end_date: pd.Timestamp) -> dict:
 # Momentum-Berechnung
 # ----------------------------------------------------------------------
 def momentum_13612u(adj_close: pd.Series, lookback_days: tuple[int, ...] = LOOKBACK_DAYS) -> pd.Series:
-    """13612U-Score in Handelstagen (Series.shift(n)) - Canary sowie
-    primäre Methode für Risk- und Defensiv-Kandidaten. Über
-    `lookback_days` wird dieselbe Formel auch für die 1U-/13U-
-    Teilkomponenten der Momentum-Tabellen genutzt."""
+    """13612U-Score in Handelstagen (Series.shift(n)) für jeden Tag der Reihe."""
     components = [adj_close / adj_close.shift(n) - 1.0 for n in lookback_days]
     return sum(components) / len(components)
 
 
-def momentum_136u(adj_close: pd.Series, lookback_days: tuple[int, ...] = LOOKBACK_136U_DAYS) -> pd.Series:
-    """136U-Score (ohne 12-Monats-Komponente) - Fallback für Kandidaten
-    mit zu kurzer Historie für die volle 13612U-Formel, siehe
-    select_best_candidate()."""
-    return momentum_13612u(adj_close, lookback_days)
+def candidate_momenta(prices: pd.Series, asof: pd.Timestamp) -> dict:
+    """Momentum-Kennzahlen eines Kandidaten zum Tag `asof` (Handelstage-
+    Methode wie momentum_13612u(), nur Kurse bis einschließlich `asof`).
+    Rückgabe: {"1u", "13u", "136u", "13612u": Wert oder NaN, "n": Anzahl
+    Renditen}. Eine Komponente (21/63/126/252 Handelstage) ist NaN, wenn
+    die Historie dafür nicht reicht; eine Kennzahl ist NaN, sobald eine
+    ihrer Komponenten fehlt."""
+    p = prices.loc[:asof].dropna().to_numpy()
+    n = len(p) - 1
+    comps = [float(p[-1] / p[-1 - k] - 1.0) if n >= k else float("nan") for k in LOOKBACK_DAYS]
+    out: dict = {"n": n}
+    for key, m in (("1u", 1), ("13u", 2), ("136u", 3), ("13612u", 4)):
+        vals = comps[:m]
+        out[key] = float("nan") if any(np.isnan(v) for v in vals) else float(np.mean(vals))
+    return out
 
 
 # ----------------------------------------------------------------------
 # Whipsaw-/Bestätigungsfilter (Makro-Regime)
 # ----------------------------------------------------------------------
-def raw_target_position(canary_mom: pd.Series, defensive_mom_best: pd.Series) -> pd.Series:
+def raw_target_position(canary_mom: pd.Series) -> pd.Series:
     """Tägliches Rohsignal (ohne Bestätigungsfilter):
-      Score(Canary) > 0                               -> "RISK"
-      Score(Canary) <= 0 und bestes Defensiv-Mom > 0   -> "DEFENSIVE"
-      sonst                                             -> "CASH"
-    `defensive_mom_best` = je Tag der Score des nach select_best_
-    candidate() besten DEFENSIVE_TICKERS-Kandidaten, oder NaN, falls
-    sich an diesem Tag kein Score ermitteln lässt (dann CASH, da
-    NaN > 0 stets False ist)."""
-    position = pd.Series("CASH", index=canary_mom.index, dtype=object)
-    risk_on = canary_mom > 0
-    defensive_on = (~risk_on) & (defensive_mom_best > 0)
-    position[risk_on] = "RISK"
-    position[defensive_on] = "DEFENSIVE"
-    return position
+      Score(Canary) > 0   -> "RISK"
+      sonst               -> "DEFENSIVE"
+    (NaN > 0 ist False, d.h. Tage ohne Score gelten als DEFENSIVE; sie
+    werden vor der Verwendung ohnehin abgeschnitten.)"""
+    return pd.Series(np.where(canary_mom > 0, RISK, DEFENSIVE),
+                     index=canary_mom.index, dtype=object)
 
 
 def apply_confirmation_filter(raw_position: pd.Series, a: int, b: int) -> tuple[pd.Series, str | None, int]:
@@ -309,8 +304,7 @@ def apply_confirmation_filter(raw_position: pd.Series, a: int, b: int) -> tuple[
     Handelstage denselben neuen Wert `s` zeigt - wie viele, hängt vom
     ZIEL-Wert ab:
       s == "RISK"  -> `b` Handelstage nötig (Wechsel HIN ZU Risk)
-      s != "RISK"  -> `a` Handelstage nötig (Wechsel WEG von Risk,
-                      inkl. DEFENSIVE <-> CASH)
+      s != "RISK"  -> `a` Handelstage nötig (Wechsel WEG von Risk)
     a=1 bzw. b=1 bedeutet: dieser Wechsel wird sofort übernommen.
 
     Gibt zusätzlich zur bestätigten Zeitreihe den Bestätigungsstatus
@@ -341,7 +335,7 @@ def apply_confirmation_filter(raw_position: pd.Series, a: int, b: int) -> tuple[
             else:
                 candidate = s
                 candidate_count = 1
-            required = b if s == "RISK" else a
+            required = b if s == RISK else a
             if candidate_count >= required:
                 held = s
                 candidate = None
@@ -358,25 +352,24 @@ def trend_raw_position(trend_prices: pd.Series, sma_days: int) -> tuple[pd.Serie
     """Tägliches Rohsignal des Trend-Index (ohne Bestätigungsfilter) auf
     dessen EIGENEM Kalender: Schlusskurs STRIKT über dem `sma_days`-Tage-
     SMA (inkl. des aktuellen Schlusskurses) -> "RISK", sonst "DEFENSIVE"
-    (Gleichstand: defensiv, wie beim TIP-Score = 0). Tage ohne SMA-Wert
+    (Gleichstand: nicht RISK, wie beim TIP-Score = 0). Tage ohne SMA-Wert
     entfallen. Rückgabe: (Rohsignal, SMA-Serie auf dem vollen Kalender)."""
     sma = trend_prices.rolling(sma_days).mean()
-    raw = pd.Series(np.where(trend_prices > sma, "RISK", "DEFENSIVE"),
+    raw = pd.Series(np.where(trend_prices > sma, RISK, DEFENSIVE),
                     index=trend_prices.index, dtype=object)[sma.notna()]
     return raw, sma
 
 
 def combine_state(tip_state: str, trend_state: str) -> str:
     """Hybrid-Verknüpfung für einen einzelnen Zustand: "RISK", sobald
-    mindestens eines der beiden Signale "RISK" meldet; sonst der
-    Defensiv-Zustand des TIP-Zweigs ("DEFENSIVE" oder "CASH")."""
-    return "RISK" if "RISK" in (tip_state, trend_state) else tip_state
+    mindestens eines der beiden Signale "RISK" meldet; sonst "DEFENSIVE"."""
+    return RISK if RISK in (tip_state, trend_state) else DEFENSIVE
 
 
 def combine_regime(tip_state: pd.Series, trend_state: pd.Series) -> pd.Series:
     """Wie combine_state(), für zwei Zeitreihen gleichen Index."""
-    risk = (tip_state == "RISK") | (trend_state == "RISK")
-    return tip_state.mask(risk, "RISK")
+    risk = (tip_state == RISK) | (trend_state == RISK)
+    return tip_state.mask(risk, RISK)
 
 
 def regime_change_scenarios(today_regime: str, tip_state: str, trend_state: str,
@@ -407,36 +400,31 @@ def regime_change_scenarios(today_regime: str, tip_state: str, trend_state: str,
 
 
 # ----------------------------------------------------------------------
-# Auswahl des besten Kandidaten innerhalb einer Ticker-Liste - für Risk-
-# und Defensiv-Kandidaten identisch. select_best_candidate() gilt für
-# einen einzelnen Tag (das heutige Datum), best_score_series() liefert
-# den besten Score für jeden Tag (Makro-Entscheidung DEFENSIVE vs. CASH).
+# Auswahl des besten Risk-Kandidaten (für einen Bewertungstag)
 # ----------------------------------------------------------------------
 # Momentum-Längen in der Reihenfolge, in der sie für die Kandidatenauswahl
-# geprüft werden: (Schlüssel in side_momenta(), Klartext).
+# geprüft werden: (Schlüssel in candidate_momenta(), Klartext).
 SELECTION_METHODS = (("13612u", "13612U"), ("136u", "136U"), ("13u", "13U"), ("1u", "1U"))
 
 
 def select_best_candidate(tickers: list[str],
                            price_data: dict[str, dict],
-                           moms: dict[str, dict[str, pd.Series]],
+                           moms: dict[str, dict],
                            date: pd.Timestamp) -> tuple[str, float | None, str]:
-    """Wählt den Kandidaten aus `tickers` mit dem höchsten Momentum an
-    `date` (reine relative Auswahl, kein Schwellenwert). Die Momentum-
-    Länge wird absteigend geprüft (SELECTION_METHODS: 13612U, 136U, 13U,
-    1U): Hat mindestens ein Kandidat an diesem Datum einen Wert der
-    jeweiligen Länge, gewinnt unter den Kandidaten MIT Wert der höchste
-    (Kandidaten ohne Wert, d.h. zu kurze Historie, scheiden aus dem
-    Vergleich aus); sonst wird die nächstkürzere Länge geprüft. Hat auch
-    für 1U kein Kandidat einen Wert, wird der Kandidat mit der längsten
-    verfügbaren Kurshistorie (Stand `date`) gewählt. `moms` = Ausgabe von
-    side_momenta() (Kennzahl -> Ticker -> Serie); `price_data` wird nur für
-    den Historienlängen-Fallback gebraucht. Rückgabe: (Ticker, Score oder
-    None, verwendete Methode als Klartext)."""
+    """Wählt den Kandidaten aus `tickers` mit dem höchsten Momentum
+    (reine relative Auswahl, kein Schwellenwert). Die Momentum-Länge wird
+    absteigend geprüft (SELECTION_METHODS: 13612U, 136U, 13U, 1U): Hat
+    mindestens ein Kandidat einen Wert der jeweiligen Länge, gewinnt unter
+    den Kandidaten MIT Wert der höchste (Kandidaten ohne Wert, d.h. zu
+    kurze Kurshistorie, scheiden aus dem Vergleich aus); sonst wird die
+    nächstkürzere Länge geprüft. Hat auch für 1U kein Kandidat einen Wert,
+    wird der Kandidat mit der längsten verfügbaren Kurshistorie (Stand
+    `date`) gewählt. `moms` = Ticker -> Ausgabe von candidate_momenta() für
+    den Bewertungstag; `price_data` wird nur für den Historienlängen-
+    Fallback gebraucht. Rückgabe: (Ticker, Score oder None, verwendete
+    Methode als Klartext)."""
     for key, label in SELECTION_METHODS:
-        mom_dict = moms[key]
-        scores = {t: mom_dict[t].loc[date] for t in tickers
-                  if date in mom_dict[t].index and pd.notna(mom_dict[t].loc[date])}
+        scores = {t: moms[t][key] for t in tickers if pd.notna(moms[t][key])}
         if scores:
             best = max(scores, key=scores.get)
             return best, scores[best], label
@@ -446,41 +434,17 @@ def select_best_candidate(tickers: list[str],
     return best, None, "längste Historie"
 
 
-def best_score_series(tickers: list[str],
-                       moms: dict[str, dict[str, pd.Series]],
-                       dates: pd.DatetimeIndex) -> pd.Series:
-    """Score des besten Kandidaten für JEDEN Tag in `dates`, nach
-    derselben Regel wie select_best_candidate(): je Tag der höchste Score
-    der längsten Momentum-Länge (SELECTION_METHODS), für die mindestens
-    ein Kandidat einen Wert hat; NaN, wenn für keine Länge ein Wert
-    vorliegt (der Historienlängen-Fallback liefert keinen Score). Die
-    Momentum-Serien müssen auf `dates` ausgerichtet sein. Wird für die
-    Makro-Entscheidung DEFENSIVE vs. CASH gebraucht (siehe
-    raw_target_position())."""
-    def best_of(mom_dict: dict[str, pd.Series]) -> pd.Series:
-        frame = pd.DataFrame({t: mom_dict[t] for t in tickers}).reindex(dates)
-        return frame.max(axis=1)          # überspringt NaN; alle NaN -> NaN
-
-    scores = best_of(moms[SELECTION_METHODS[0][0]])
-    for key, _ in SELECTION_METHODS[1:]:
-        scores = scores.fillna(best_of(moms[key]))
-    return scores.astype(float)
-
-
-def sort_candidates(tickers: list[str],
-                    moms: dict[str, dict[str, pd.Series]],
-                    date: pd.Timestamp) -> list[str]:
-    """Sortiert `tickers` für die Momentum-Tabellen: nach der längsten
-    Momentum-Länge (SELECTION_METHODS), für die der Kandidat an `date`
-    einen Wert hat - Kandidaten mit 13612U-Wert zuerst, dann die mit
-    136U-Wert usw. - und innerhalb derselben Länge absteigend nach diesem
-    Wert. Kandidaten ohne jeden Wert stehen am Ende (Reihenfolge der
-    Konfiguration bleibt erhalten, da sorted() stabil ist)."""
+def sort_candidates(tickers: list[str], moms: dict[str, dict]) -> list[str]:
+    """Sortiert `tickers` für die Momentum-Tabelle: nach der längsten
+    Momentum-Länge (SELECTION_METHODS), für die der Kandidat einen Wert
+    hat - Kandidaten mit 13612U-Wert zuerst, dann die mit 136U-Wert usw. -
+    und innerhalb derselben Länge absteigend nach diesem Wert. Kandidaten
+    ohne jeden Wert stehen am Ende (Reihenfolge der Konfiguration bleibt
+    erhalten, da sorted() stabil ist)."""
     def key(t: str) -> tuple[int, float]:
         for rank, (mkey, _) in enumerate(SELECTION_METHODS):
-            series = moms[mkey][t]
-            if date in series.index and pd.notna(series.loc[date]):
-                return rank, -float(series.loc[date])
+            if pd.notna(moms[t][mkey]):
+                return rank, -float(moms[t][mkey])
         return len(SELECTION_METHODS), 0.0
     return sorted(tickers, key=key)
 
@@ -488,65 +452,55 @@ def sort_candidates(tickers: list[str],
 # ----------------------------------------------------------------------
 # Hilfsfunktionen für main()
 # ----------------------------------------------------------------------
-def _on_calendar(series_by_ticker: dict[str, pd.Series], calendar: pd.DatetimeIndex) -> dict[str, pd.Series]:
-    """Richtet jede Serie per Vorwärtsfüllung auf `calendar` aus."""
-    return {t: s.reindex(calendar, method="ffill") for t, s in series_by_ticker.items()}
-
-
-def _from_date(series_by_ticker: dict[str, pd.Series], start: pd.Timestamp) -> dict[str, pd.Series]:
-    """Schneidet jede Serie ab `start` (inklusive) zu."""
-    return {t: s.loc[s.index >= start] for t, s in series_by_ticker.items()}
-
-
 def _mom_table_name(name: str, name_col: int) -> str:
     if len(name) > name_col:
         return name[: name_col - 1] + "…"
     return name
 
 
+def _fmt_mom(value: float) -> str:
+    """Momentum als Prozentwert, "-" falls nicht berechenbar (zu kurze Historie)."""
+    return "-" if pd.isna(value) else f"{value:.2%}"
+
+
 def print_momentum_table(title: str,
                          tickers: dict[str, str],
-                         moms: dict[str, dict[str, pd.Series]],
-                         today: pd.Timestamp,
-                         chosen_ticker: str | None) -> None:
-    """Gibt die Momentum-Übersicht (1U/13U/136U/13612U) der Kandidaten
-    einer Seite aus. `moms` enthält je Kennzahl ("1u", "13u", "136u",
-    "13612u") das Ticker -> Serie-Dict. `chosen_ticker` wird als
-    "heute gewählt" markiert (None: keine Markierung). Die Zeilen sind
-    nach sort_candidates() sortiert (längste verfügbare Momentum-Länge
-    zuerst, darin absteigend nach Wert). Feste
-    Spaltenbreiten, damit die Tabellen bei unterschiedlich langen Namen
-    nicht verrutschen; die Namensspalte richtet sich nach dem längsten
+                         moms: dict[str, dict],
+                         markers: dict[str, str]) -> None:
+    """Gibt die Momentum-Übersicht (1U/13U/136U/13612U) der Kandidaten aus. `markers`: Ticker -> Text hinter der Zeile (z.B. "gewählt").
+    Die Zeilen sind nach sort_candidates() sortiert (längste verfügbare
+    Momentum-Länge zuerst, darin absteigend nach Wert). Feste
+    Spaltenbreiten, damit die Tabelle bei unterschiedlich langen Namen
+    nicht verrutscht; die Namensspalte richtet sich nach dem längsten
     Namen, höchstens aber MOM_TABLE_NAME_COL_MAX."""
-    print(f"\n{title} (Stand {today.date()}):")
+    print(f"\n{title}:")
     ticker_col = max(10, max(len(t) for t in tickers) + 1)
     name_col = min(MOM_TABLE_NAME_COL_MAX, max(len(n) for n in tickers.values()))
     header = (f"  {'Ticker':<{ticker_col}}{'Name':<{name_col}}  "
               f"{'1U':>8}{'13U':>8}{'136U':>8}{'13612U':>8}")
     print(header)
     print("-" * len(header))
-
-    def value(series: pd.Series) -> float:
-        return series.loc[today] if today in series.index and pd.notna(series.loc[today]) else float("nan")
-
-    for t in sort_candidates(list(tickers), moms, today):
-        v1u, v13u, v136u, v13612u = (value(moms[key][t]) for key in ("1u", "13u", "136u", "13612u"))
-        marker = " <- heute gewählt" if t == chosen_ticker else ""
+    for t in sort_candidates(list(tickers), moms):
+        m = moms[t]
+        marker = f" <- {markers[t]}" if t in markers else ""
         print(f"  {t:<{ticker_col}}"
               f"{_mom_table_name(tickers[t], name_col):<{name_col}}  "
-              f"{v1u:>8.2%}{v13u:>8.2%}{v136u:>8.2%}{v13612u:>8.2%}{marker}")
+              f"{_fmt_mom(m['1u']):>8}{_fmt_mom(m['13u']):>8}{_fmt_mom(m['136u']):>8}"
+              f"{_fmt_mom(m['13612u']):>8}{marker}")
 
 
-def side_momenta(data: dict[str, dict], calendar: pd.DatetimeIndex) -> dict[str, dict[str, pd.Series]]:
-    """Berechnet je Ticker die Momentum-Kennzahlen 1U/13U/136U/13612U auf
-    dessen eigenem Kalender und richtet sie auf `calendar` aus."""
-    native = {
-        "1u": {t: momentum_13612u(d["prices"], lookback_days=(21,)) for t, d in data.items()},
-        "13u": {t: momentum_13612u(d["prices"], lookback_days=(21, 63)) for t, d in data.items()},
-        "136u": {t: momentum_136u(d["prices"]) for t, d in data.items()},
-        "13612u": {t: momentum_13612u(d["prices"]) for t, d in data.items()},
-    }
-    return {key: _on_calendar(series, calendar) for key, series in native.items()}
+def current_phase_start(confirmed_position: pd.Series) -> tuple[pd.Timestamp, bool]:
+    """Erster Tag der aktuellen, mit dem letzten Schlusskurs bestätigten
+    RISK-Phase (der Tag, an dem der Wechsel zu RISK bestätigt wurde; das
+    Signal-Regime des Tages ist die Handlungsgrundlage der Abend-Order).
+    Zweiter Rückgabewert: True, falls die Phase schon am Beginn der
+    Regime-Historie läuft (der echte Beginn liegt dann davor)."""
+    not_risk = confirmed_position != RISK
+    if not not_risk.any():
+        return confirmed_position.index[0], True
+    last_not_risk = not_risk[not_risk].index[-1]
+    pos = confirmed_position.index.get_loc(last_not_risk)
+    return confirmed_position.index[pos + 1], False
 
 
 # ----------------------------------------------------------------------
@@ -569,63 +523,47 @@ def main() -> None:
               f"heute ({query_end_date.date()}) abgefragt, falls bereits verfügbar.")
     print()
 
-    # --- Daten laden ---
-    canary = load_ticker(CANARY_TICKER, query_end_date)
-    trend = load_ticker(TREND_TICKER, query_end_date)
-    risk_data = {t: load_ticker(t, query_end_date) for t in RISK_TICKERS}
-    defensive_data = {t: load_ticker(t, query_end_date) for t in DEFENSIVE_TICKERS}
+    # ==================================================================
+    # Stufe 1: Signal-Assets (TIP, ^NDX) -> Regime-Historie
+    # ==================================================================
+    regime_start = query_end_date - pd.Timedelta(days=REGIME_HISTORY_CALENDAR_DAYS)
+    canary = load_ticker(CANARY_TICKER, regime_start, query_end_date)
+    trend = load_ticker(TREND_TICKER, regime_start, query_end_date)
 
-    if canary["dropped_today"]:
-        print(f"[info] {ALL_TICKER_NAMES[CANARY_TICKER]}: heutiger (unfertiger) Kurs "
-              f"verworfen, letzter berücksichtigter Handelstag: "
-              f"{canary['prices'].index[-1].date()}")
-    for t, d in {TREND_TICKER: trend, **risk_data, **defensive_data}.items():
+    for t, d in {CANARY_TICKER: canary, TREND_TICKER: trend}.items():
         if d["dropped_today"]:
-            print(f"[info] {ALL_TICKER_NAMES[t]}: heutiger Kurs verworfen "
-                  f"(Sicherheitsregel, siehe Docstring), letzter berücksichtigter "
-                  f"Handelstag: {d['prices'].index[-1].date()}")
+            print(f"[info] {ALL_TICKER_NAMES[t]}: heutiger (unfertiger) Kurs verworfen, "
+                  f"letzter berücksichtigter Handelstag: {d['prices'].index[-1].date()}")
     print()
 
-    # --- Momentum je Ticker auf dem eigenen Kalender berechnen und auf
-    #     den TIP-Kalender ausrichten (siehe Docstring "Kalender") ---
     master_calendar = canary["prices"].index
     canary_mom = momentum_13612u(canary["prices"])
-    risk_mom = side_momenta(risk_data, master_calendar)
-    defensive_mom = side_momenta(defensive_data, master_calendar)
-
-    # Makro-Entscheidung DEFENSIVE vs. CASH: je Tag der Score des besten
-    # Defensiv-Kandidaten (13612U, sonst 136U, sonst kein Score).
-    defensive_mom_best = best_score_series(
-        list(DEFENSIVE_TICKERS), defensive_mom, master_calendar)
 
     # Trend-Signal (SMA): Rohsignal und Bestätigungsfilter auf dem eigenen
     # Kalender des Index, danach vorwärtsgefüllt auf den TIP-Kalender.
     trend_raw_native, trend_sma_native = trend_raw_position(trend["prices"], TREND_SMA_DAYS)
     if trend_raw_native.empty:
         raise ValueError(f"Zu wenig Historie für den SMA{TREND_SMA_DAYS} von {TREND_TICKER} - "
-                          f"ggf. DOWNLOAD_LOOKBACK_CALENDAR_DAYS erhöhen.")
+                          f"ggf. REGIME_HISTORY_YEARS erhöhen.")
     trend_conf_native, trend_pending_candidate, trend_pending_count = apply_confirmation_filter(
         trend_raw_native, TREND_CONFIRMATION_A, TREND_CONFIRMATION_B)
     trend_raw = trend_raw_native.reindex(master_calendar, method="ffill")
     trend_conf = trend_conf_native.reindex(master_calendar, method="ffill")
     trend_gap = (trend["prices"] / trend_sma_native - 1.0).reindex(master_calendar, method="ffill")
 
-    valid_mask = canary_mom.notna() & defensive_mom_best.notna() & trend_conf.notna()
+    valid_mask = canary_mom.notna() & trend_conf.notna()
     if not valid_mask.any():
         raise ValueError("Zu wenig gemeinsame Historie für die gewählten Lookbacks - "
-                          "ggf. DOWNLOAD_LOOKBACK_CALENDAR_DAYS erhöhen.")
+                          "ggf. REGIME_HISTORY_YEARS erhöhen.")
     first_valid_date = master_calendar[valid_mask][0]
 
     canary_mom = canary_mom.loc[canary_mom.index >= first_valid_date]
-    defensive_mom_best = defensive_mom_best.loc[defensive_mom_best.index >= first_valid_date]
     trend_raw = trend_raw.loc[trend_raw.index >= first_valid_date]
     trend_conf = trend_conf.loc[trend_conf.index >= first_valid_date]
     trend_gap = trend_gap.loc[trend_gap.index >= first_valid_date]
-    risk_mom = {key: _from_date(series, first_valid_date) for key, series in risk_mom.items()}
-    defensive_mom = {key: _from_date(series, first_valid_date) for key, series in defensive_mom.items()}
 
     # --- Rohsignal + Bestätigungsfilter (TIP), Hybrid-Verknüpfung mit SMA ---
-    raw_position = raw_target_position(canary_mom, defensive_mom_best)
+    raw_position = raw_target_position(canary_mom)
     tip_confirmed, pending_candidate, pending_count = apply_confirmation_filter(
         raw_position, CONFIRMATION_A, CONFIRMATION_B)
     confirmed_position = combine_regime(tip_confirmed, trend_conf)
@@ -634,6 +572,41 @@ def main() -> None:
     today_regime = confirmed_position.iloc[-1]
     tip_state = tip_confirmed.iloc[-1]
     trend_state = trend_conf.iloc[-1]
+
+    # ==================================================================
+    # Stufe 2: Risk-Kandidaten (nur im Regime RISK)
+    # ==================================================================
+    chosen = None            # (Ticker, Score, Methode)
+    phase_start = None
+    phase_from_history_start = False
+    moms_today: dict[str, dict] = {}
+    if today_regime == RISK:
+        phase_start, phase_from_history_start = current_phase_start(confirmed_position)
+        # Normalfall: Auswahl zum Phasenbeginn. Läuft die Phase schon am Beginn der
+        # Regime-Historie, ist der echte Beginn nicht bestimmbar - dann gilt
+        # ersatzweise das heutige Ranking.
+        selection_date = today if phase_from_history_start else phase_start
+        candidates_start = selection_date - pd.Timedelta(days=CANDIDATE_WARMUP_CALENDAR_DAYS)
+        print(f"[info] Risk-Phase seit {phase_start.date()}: Risk-Kandidaten werden ab "
+              f"{candidates_start.date()} geladen (Auswahltag {selection_date.date()}).")
+        if phase_from_history_start:
+            print(f"[warn] Die Risk-Phase läuft schon am Beginn der Regime-Historie "
+                  f"({phase_start.date()}); der echte Phasenbeginn liegt davor. Ersatzweise "
+                  f"gilt das heutige Ranking. REGIME_HISTORY_YEARS erhöhen.")
+        risk_data = {t: load_ticker(t, candidates_start, query_end_date) for t in RISK_TICKERS}
+        for t, d in risk_data.items():
+            if d["dropped_today"]:
+                print(f"[info] {ALL_TICKER_NAMES[t]}: heutiger Kurs verworfen "
+                      f"(Sicherheitsregel, siehe Docstring), letzter berücksichtigter "
+                      f"Handelstag: {d['prices'].index[-1].date()}")
+        print()
+
+        moms_today = {t: candidate_momenta(d["prices"], today) for t, d in risk_data.items()}
+        moms_at_selection = (moms_today if selection_date == today else
+                             {t: candidate_momenta(d["prices"], selection_date)
+                              for t, d in risk_data.items()})
+        chosen = select_best_candidate(list(RISK_TICKERS), risk_data, moms_at_selection, selection_date)
+        top_today = select_best_candidate(list(RISK_TICKERS), risk_data, moms_today, today)
 
     if trend["prices"].index[-1] != today:
         print(f"[warn] Letzter Kurs von {ALL_TICKER_NAMES[TREND_TICKER]} ist "
@@ -653,32 +626,41 @@ def main() -> None:
               f"{trend_gap.loc[date]:>+10.2%}  {trend_conf.loc[date]:<9} | "
               f"{confirmed_position.loc[date]:<9}")
 
-    # --- Zielauswahl anhand der heutigen Momentum-Werte ---
-    target_ticker = None
-    if today_regime == "RISK":
-        target_ticker, _, _ = select_best_candidate(
-            list(RISK_TICKERS), risk_data, risk_mom, today)
-    elif today_regime == "DEFENSIVE":
-        target_ticker, _, _ = select_best_candidate(
-            list(DEFENSIVE_TICKERS), defensive_data, defensive_mom, today)
-
     print(f"\nAktuell bestätigtes Regime (Stand Schlusskurs {today.date()}): {today_regime}")
 
-    # --- Momentum-Übersicht der Risk- und Defensiv-Kandidaten ---
-    print_momentum_table("Momentum der Risk-Kandidaten", RISK_TICKERS, risk_mom, today,
-                         target_ticker if today_regime == "RISK" else None)
-    print_momentum_table("Momentum der Defensiv-Kandidaten", DEFENSIVE_TICKERS, defensive_mom, today,
-                         target_ticker if today_regime == "DEFENSIVE" else None)
+    # --- Empfehlung und Momentum-Übersicht der Risk-Kandidaten ---
+    if today_regime == RISK:
+        ticker, _, method = chosen
+        print(f"Empfehlung: {ticker} | {ALL_TICKER_NAMES[ticker]}")
+        n_phase_days = int(((confirmed_position.index >= phase_start)).sum())
+        since = f"seit {phase_start.date()} ({n_phase_days} Handelstag(e))"
+        if phase_from_history_start:
+            since = f"mindestens {since}"
+        print(f"Risk-Phase {since}. Die Auswahl wird zum Phasenbeginn getroffen und bis zum "
+              f"Phasenende gehalten (Methode: {method}).")
+        markers = {ticker: "gehalten (Wahl zum Phasenbeginn)"}
+        if top_today[0] != ticker:
+            markers[top_today[0]] = "heute vorne"
+        title = f"Momentum der Risk-Kandidaten heute ({today.date()})"
+        if phase_from_history_start:
+            title += " (Phasenbeginn nicht bestimmbar, ersatzweise Grundlage der Auswahl)"
+        print_momentum_table(title, RISK_TICKERS, moms_today, markers)
+        if top_today[0] != ticker:
+            print(f"\nHinweis: Heute läge {top_today[0]} ({ALL_TICKER_NAMES[top_today[0]]}) "
+                  f"vorn. Gehalten würde trotzdem {ticker}: Die Auswahl zum Phasenbeginn "
+                  f"gilt bis zum Ende der Risk-Phase.")
+    else:
+        print("Empfehlung: Tagesgeld")
 
     # --- Hinweis auf im Aufbau befindlichen Regimewechsel ---
     tip_pending = None
     if pending_candidate is not None:
         tip_pending = (pending_candidate, pending_count,
-                       CONFIRMATION_B if pending_candidate == "RISK" else CONFIRMATION_A)
+                       CONFIRMATION_B if pending_candidate == RISK else CONFIRMATION_A)
     trend_pending = None
     if trend_pending_candidate is not None:
         trend_pending = (trend_pending_candidate, trend_pending_count,
-                         TREND_CONFIRMATION_B if trend_pending_candidate == "RISK"
+                         TREND_CONFIRMATION_B if trend_pending_candidate == RISK
                          else TREND_CONFIRMATION_A)
     scenarios = regime_change_scenarios(today_regime, tip_state, trend_state,
                                         tip_pending, trend_pending)
@@ -717,18 +699,18 @@ def main() -> None:
     print(signal_line(f"NDX-SMA{TREND_SMA_DAYS}:", trend_state,
                       f"(Kurs {abs(gap):.2%} {'über' if gap > 0 else 'unter'} SMA)", trend_pending))
 
-    tip_risk, trend_risk = tip_state == "RISK", trend_state == "RISK"
+    tip_risk, trend_risk = tip_state == RISK, trend_state == RISK
     if tip_risk and trend_risk:
         print("\nBeide Signale melden RISK. Das Regime wechselt erst, wenn beide "
               "nicht mehr RISK melden.")
     elif tip_risk:
         print(f"\nNur das TIP-Signal trägt RISK (der NDX liegt unter seinem SMA{TREND_SMA_DAYS}). "
               f"Kippt das TIP-Signal ({CONFIRMATION_A} Bestätigungstag(e)), wechselt das "
-              f"Regime zu DEFENSIVE/CASH, solange der NDX nicht über die SMA zurückkehrt.")
+              f"Regime zu DEFENSIVE, solange der NDX nicht über die SMA zurückkehrt.")
     elif trend_risk:
         print(f"\nNur das SMA-Signal trägt RISK (das TIP-Signal ist nicht RISK). Fällt der NDX "
               f"unter seine SMA{TREND_SMA_DAYS} ({TREND_CONFIRMATION_A} Bestätigungstag(e)), "
-              f"wechselt das Regime zu DEFENSIVE/CASH, solange das TIP-Signal nicht RISK meldet.")
+              f"wechselt das Regime zu DEFENSIVE, solange das TIP-Signal nicht RISK meldet.")
     else:
         print(f"\nBeide Signale melden nicht RISK. Zurück zu RISK, sobald eines davon bestätigt "
               f"RISK meldet (TIP {CONFIRMATION_B} Tag(e), SMA {TREND_CONFIRMATION_B} Tag(e)).")

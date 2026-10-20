@@ -8,25 +8,29 @@ Das Thema (Topic) kommt aus der Umgebungsvariable NTFY_TOPIC (in GitHub
 als Secret hinterlegt). Optional: NTFY_SERVER (Standard https://ntfy.sh).
 
 Die Werte werden aus der Textausgabe von canary.py gelesen (letzte Zeile
-der Signal-Historie, Zeile "Aktuell bestätigtes Regime", Markierung
-"<- heute gewählt", [warn]-Zeilen). Ändert sich das
+der Signal-Historie, Zeile "Aktuell bestätigtes Regime", Zeile
+"Empfehlung:", Zeile "Risk-Phase seit", [warn]-Zeilen). Ändert sich das
 Ausgabeformat von canary.py, muss dieses Script angepasst werden; kann es
 die Ausgabe nicht lesen, bricht es ab (der Workflow meldet das per Push).
 
 Nachricht:
-  Titel:    "<Regime>: <Asset>", bei einem Regimewechsel
-            "Wechsel zu <Regime>: <Asset>" (hohe Priorität). Das Regime ist
-            nur RISK oder DEFENSIVE; Cash ist ein Asset der Defensiv-Seite.
-            Ein Wechsel liegt nur vor, wenn sich das Regime gegenüber dem
-            Vortag ändert (nicht bei DEFENSIVE <-> Cash).
+  Das Regime ist RISK oder DEFENSIVE (im Regime DEFENSIVE wird nur
+  Tagesgeld gehalten; es gibt keine Defensiv-ETFs und keinen Cash-Zustand).
+  Titel:    "<Regime>: <Asset>", also "RISK: <Ticker>" oder "DEFENSIVE:
+            Tagesgeld". Bei einem Regimewechsel "Wechsel zu <Regime>:
+            <Asset>" (hohe Priorität). Ein Wechsel liegt nur vor, wenn
+            sich das Regime gegenüber dem Vortag ändert. Das Risk-Asset
+            wird zum Beginn der Risk-Phase gewählt und bis zum Phasenende
+            gehalten, innerhalb einer Phase ändert sich die Empfehlung
+            also nicht.
             Börse geschlossen (Wochentag nach dem Cutoff, aber der letzte
-            Kurs ist nicht von heute, z.B. US-Feiertag): Titel
-            "Börse zu: <Regime>: <Asset>", niedrige Priorität, kein "Wechsel zu"
+            Kurs ist nicht von heute, z.B. US-Feiertag): Titel mit
+            Präfix "Börse zu: ", niedrige Priorität, kein "Wechsel zu"
             (der Stand ist der des letzten Handelstags, ein damaliger Wechsel
             wurde schon gemeldet).
-  Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung, Stand,
-            bei Bedarf Warnzeilen (z.B. Lauf vor dem Cutoff, korrigierter
-            Kurssprung).
+  Inhalt:   TIP-Wert, SMA-Abstand (NDX zur SMA200), Regime, Empfehlung,
+            bei RISK der Beginn der Risk-Phase, Stand, bei Bedarf
+            Warnzeilen (z.B. Lauf vor dem Cutoff, korrigierter Kurssprung).
 Die vollständige Ausgabe steht im Protokoll des GitHub-Laufs.
 """
 
@@ -42,9 +46,7 @@ from zoneinfo import ZoneInfo
 MAX_BYTES = 3900
 
 
-def _two_state(state: str) -> str:
-    """CASH ist ein Asset der Defensiv-Seite, kein eigenes Regime."""
-    return "RISK" if state == "RISK" else "DEFENSIVE"
+REGIME_LABELS = {"RISK": "RISK", "DEFENSIVE": "DEFENSIVE"}
 
 
 def _fmt_pct(text: str) -> str:
@@ -82,17 +84,19 @@ def _market_closed(info: dict, text: str) -> bool:
 def parse_output(text: str) -> dict:
     lines = text.splitlines()
     info: dict = {"state": None, "stand": None, "target": None,
-                  "prev_state": None, "tip": None, "gap": None,
-                  "warnings": []}
+                  "phase_since": None, "prev_state": None, "tip": None,
+                  "gap": None, "warnings": []}
 
     for line in lines:
         m = re.match(r"Aktuell bestätigtes Regime \(Stand Schlusskurs ([\d-]+)\): (\w+)", line)
         if m:
             info["stand"], info["state"] = m.group(1), m.group(2)
-        if "<- heute gewählt" in line:
-            m = re.match(r"\s*(\S+)\s+(.*?)\s{2,}", line)
-            if m:
-                info["target"] = (m.group(1), m.group(2))
+        m = re.match(r"Empfehlung: (\S+) \| (.+?)\s*$", line)
+        if m:
+            info["target"] = (m.group(1), m.group(2))
+        m = re.match(r"Risk-Phase (?:mindestens )?seit ([\d-]+)", line)
+        if m:
+            info["phase_since"] = m.group(1)
         if line.startswith("[warn]"):
             info["warnings"].append(line)
 
@@ -127,28 +131,38 @@ def build_message(text: str) -> tuple[str, str, int]:
     if info["state"] is None:
         raise ValueError("Regime in der Ausgabe nicht gefunden - Lauf unvollständig?")
 
-    regime = _two_state(info["state"])
-    if info["state"] == "CASH" or info["target"] is None:
-        asset_short, asset_full = "Cash", "Cash"
+    if info["state"] not in REGIME_LABELS:
+        raise ValueError(f"Unbekanntes Regime in der Ausgabe: {info['state']!r}")
+    regime = info["state"]
+    if regime == "RISK":
+        if info["target"] is None:
+            raise ValueError("Empfehlung (Risk-Asset) in der Ausgabe nicht gefunden - Lauf unvollständig?")
+        asset_short, asset_full = info["target"]
+        headline = f"RISK: {asset_short}"
+        change_headline = f"Wechsel zu RISK: {asset_short}"
+        recommendation = f"{asset_short} ({asset_full})"
     else:
-        asset_short = info["target"][0]
-        asset_full = info["target"][1]
+        headline = "DEFENSIVE: Tagesgeld"
+        change_headline = "Wechsel zu DEFENSIVE: Tagesgeld"
+        recommendation = "Tagesgeld"
 
     closed = _market_closed(info, text)
     changed = (not closed and info["prev_state"] is not None
-               and _two_state(info["prev_state"]) != regime)
+               and info["prev_state"] != regime)
     if closed:
-        title, priority = f"Börse zu: {regime}: {asset_short}", 2
+        title, priority = f"Börse zu: {headline}", 2
     else:
-        title = f"Wechsel zu {regime}: {asset_short}" if changed else f"{regime}: {asset_short}"
+        title = change_headline if changed else headline
         priority = 4 if changed else 3
 
     lines = [f"TIP: {_fmt_pct(info['tip'])}",
              f"SMA: {_fmt_pct(info['gap'])}",
-             f"Regime: {regime}",
-             f"Empfehlung: {asset_full}",
-             f"Stand: {_fmt_date(info['stand'])}"
-             + (" (Börse geschlossen, keine neuen Kurse)" if closed else "")]
+             f"Regime: {REGIME_LABELS[regime]}",
+             f"Empfehlung: {recommendation}"]
+    if regime == "RISK" and info["phase_since"] is not None:
+        lines.append(f"Risk-Phase seit: {_fmt_date(info['phase_since'])}")
+    lines.append(f"Stand: {_fmt_date(info['stand'])}"
+                 + (" (Börse geschlossen, keine neuen Kurse)" if closed else ""))
 
     lines += [_short_warning(w) for w in info["warnings"]]
 

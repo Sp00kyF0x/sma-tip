@@ -1,10 +1,10 @@
 # SMA-TIP: steuerbewusste taktische Allokation
 
 **SMA-TIP** ist ein regelbasiertes Signal, das börsentäglich sagt, ob ein (gehebelter) Aktien-ETF
-oder eine defensive Position gehalten werden soll. Das Repository enthält
+oder Tagesgeld gehalten werden soll. Das Repository enthält
 
 - das **Live-Signal** (`canary.py`), das nach US-Börsenschluss läuft und eine Push-Nachricht schickt,
-- einen **Backtest** mit deutscher Steuerlogik (`backtest.py`),
+- einen **Backtest** mit deutscher Steuerlogik (`backtest.py`, rein synthetisch),
 - Werkzeuge für **Kalibrierung** und **Depotauswertung**.
 
 > **Hinweis:** Dies ist ein Entscheidungshilfe-Projekt und keine Anlageberatung.
@@ -19,7 +19,7 @@ oder eine defensive Position gehalten werden soll. Das Repository enthält
 ### Idee in einem Satz
 
 Man ist investiert (**RISK**), solange *mindestens eines* von zwei Signalen grünes Licht gibt,
-und geht erst in die Defensive, wenn *beide* schlecht stehen.
+und geht erst ins Tagesgeld, wenn *beide* schlecht stehen.
 
 ### Die zwei Signale
 
@@ -39,7 +39,7 @@ Score = 1/4 · [ (P0/P21 − 1) + (P0/P63 − 1) + (P0/P126 − 1) + (P0/P252 �
 
 ```
 Regime = RISK       wenn TIP-Signal = RISK  ODER  SMA-Signal = RISK
-Regime = DEFENSIV   nur wenn beide Signale nicht RISK melden
+Regime = DEFENSIV   nur wenn beide Signale nicht RISK melden (gehalten wird dann Tagesgeld)
 ```
 
 Die ODER-Verknüpfung ist der Kern: Das Trendsignal wirkt praktisch nur dann, wenn das
@@ -53,16 +53,36 @@ Ein neues Signal gilt erst nach mehreren aufeinanderfolgenden Handelstagen als b
 | Signal | Weg von RISK | Hin zu RISK |
 |---|---|---|
 | TIP | 1 Tag | 2 Tage |
-| SMA | 1 Tag | 1 Tag |
+| SMA | 1 Tag | 2 Tage |
 
 Hysterese-Bänder um den SMA wurden getestet und bewusst **nicht** übernommen (siehe unten).
 
 ### Was gehalten wird
 
-- **RISK:** ein Risk-ETF, z. B. ein 2x-S&P-500-ETF (`18MF.DE`) oder ein 1x-ETF (`SXR4.DE`).
-  Bei mehreren Kandidaten gewinnt zu Beginn jeder Risk-Phase der mit dem höchsten Momentum.
-- **DEFENSIV:** `FTGB.SG` (First Trust FactorFX) ab seiner Notierung (2017-12-27),
-  davor Cash. Ist auch der Defensiv-Score nicht positiv, gilt Cash.
+- **RISK:** ein Risk-ETF aus der Kandidatenliste in `canary.py` (`RISK_TICKERS`: 2x-ETFs auf S&P 500, MSCI USA,
+  MSCI World und MSCI ACWI). Gewählt wird **einmal zu Beginn der Risk-Phase** der Kandidat mit dem höchsten
+  13612U-Momentum, gehalten wird er bis zum Phasenende.
+- **DEFENSIV:** Gehalten wird Tagesgeld. Die Defensiv-Seite besteht nur noch daraus. Es gibt keine Defensiv-ETFs, keine Defensiv-Kurse und keinen
+  Cash-Zustand. Der Backtest (`backtest.py`) rechnet Risk-off-Phasen als Tagesgeld (EZB-Einlagensatz abzüglich 0,25 %,
+  nie unter 0 %, täglich nach Abgeltungsteuer gutgeschrieben). Ein Defensiv-ETF lohnt sich bei den vielen kurzen Phasen und
+  den Spreads nicht.
+
+**Momentum der Risk-Kandidaten:** normales 13612U-Momentum auf den Kursen der letzten 21/63/126/252 Handelstage, wie beim
+Canary TIP (Fallbackkette 136U → 13U → 1U → längste Historie, wenn die Historie eines Kandidaten nicht reicht). Es ist
+unabhängig vom Regime, auch über Tagesgeld-Phasen hinweg.
+
+- **Zweistufige Abfrage:** Stufe 1 lädt TIP und `^NDX` über eine lange Historie (`REGIME_HISTORY_YEARS` = 10 plus Einlaufzeit)
+  und liefert die Regime-Historie. Stufe 2 bestimmt daraus den Beginn der aktuellen Risk-Phase und lädt die Kandidaten ab
+  einem Datum rund 252 Handelstage davor. Im Regime DEFENSIVE werden keine Kandidaten abgefragt.
+- **Auswahl zum Phasenbeginn:** Das Script leitet den Phasenbeginn bei jedem Lauf aus der Regime-Historie ab (kein
+  gespeicherter Zustand) und gibt als Empfehlung das Asset aus, das zu Phasenbeginn vorn lag. Die Momentum-Tabelle zeigt das
+  heutige Ranking nur zur Information; das gehaltene Asset ist markiert.
+- **Hebel:** Die Kandidaten werden ohne Hebel-Anpassung verglichen, der Pool enthält deshalb nur 2x-Produkte. Ein 1x-Produkt
+  (z. B. `XDEM.DE`) wurde entfernt: In einem Test der Auswahl zu den Phasenbeginnen mit echten Kursen wurde es nach Crashs
+  bevorzugt und kostete in der Erholung viel Rendite. Derselbe Test zeigte bei gleich gehebelten Kandidaten keinen belastbaren
+  Unterschied zwischen Kalender-Momentum und einem Momentum nur aus Risk-Tagen, daher die einfachere Methode. Die Auswahl
+  hat insgesamt wenig Einfluss (die Kandidaten sind sehr ähnlich), die Stichprobe umfasst nur rund 12 Phasen. Alle
+  Backtests verwenden ein festes S&P-500-Asset.
 
 ### Ausführung
 
@@ -74,21 +94,46 @@ Im Backtest wirkt das Signal von Tag *d−1* an Tag *d* (kein Look-Ahead).
 
 ## Ergebnisse des Backtests (nach Steuern, seit Dezember 2004)
 
-| Variante | CAGR | Max. Drawdown |
-|---|---|---|
-| 2x SMA-TIP (Hybrid) | 25,5 % | −58,9 % |
-| 2x Buy & Hold | 17,4 % | −82,3 % |
-| 1x SMA-TIP (Hybrid) | 14,0 % | −35,2 % |
-| 1x Buy & Hold | 11,1 % | −51,6 % |
+Quelle: `backtest.py` (rein synthetisches S&P 500 aus SPY in EUR, Stand 20. Oktober 2026,
+Risk-off als Tagesgeld, Spreads und Steuern modelliert). Hauptfall: 2x-Hebel in EUR wie `18MF.DE`.
 
-Zeitraum bis Oktober 2026. In der Ausgabe von `backtest.py` heißt die Strategie noch „TIP+SMA“. Steuern (Kapitalertragsteuer, Teilfreistellung, Vorabpauschale)
-sind im Ergebnis enthalten, Spread und Gebühren beim Handel nicht.
+| Variante | CAGR | Max. Drawdown | Sharpe |
+|---|---|---|---|
+| 2x TIPxSMA (Hybrid) | 23,1 % | −59,0 % | 0,79 |
+| 2x Buy & Hold | 17,6 % | −81,7 % | 0,61 |
+| 1x TIPxSMA (Hybrid) | 12,9 % | −32,3 % | 0,80 |
+| 1x Buy & Hold | 11,3 % | −51,4 % | 0,64 |
+
+**Sensitivitäten (CAGR des 2x-Hybrids, Vorsprung gegenüber Buy & Hold):**
+
+| Variante | 2x Hybrid | 2x B&H | Vorsprung | 1x Hybrid (Vorsprung) |
+|---|---|---|---|---|
+| Hauptfall (EUR-Hebel, Spread ×1) | 23,1 % | 17,6 % | +5,5 PP | 12,9 % (+1,6 PP) |
+| Hebel in USD (wie `DBPG.DE`) | 21,7 % | 15,5 % | +6,2 PP | 12,9 % (+1,6 PP) |
+| Spread ×2 | 22,9 % | 17,6 % | +5,3 PP | 12,8 % (+1,5 PP) |
+| Spread ×3 | 22,6 % | 17,6 % | +5,0 PP | 12,7 % (+1,4 PP) |
+
+Die Strategie heißt in der Ausgabe von `backtest.py` „TIPxSMA“. Zeitraum bis Oktober 2026. Die Grafiken zeigen nur die 2x-Varianten, die Textauswertung auch 1x.
+
+**Einordnung:**
+- Ältere Läufe mit realen ETFs (früheres Script, entfernt) zeigten 2x etwa 24,7 % CAGR. Das war zu optimistisch: Europäische ETFs
+  werden um 17:30 (Xetra) bewertet, das Signal entsteht aber erst zum US-Schluss. Am Xetra-Schluss sind nur rund 60 %
+  der US-Tagesbewegung eingepreist, ein Verkauf zum Xetra-Kurs vermied deshalb einen Teil der Abendverluste.
+  Der synthetische Kurs am US-Schluss entspricht einer Ausführung am Abend (z. B. Abendhandel).
+- Der Vorsprung gegenüber Buy & Hold bleibt in allen Varianten klar: 2x +5,0 bis +6,2 PP, 1x +1,4 bis +1,6 PP,
+  bei deutlich kleinerem Drawdown. Er kommt vor allem aus den Krisenphasen (2008, 2016, 2020, 2022). In einzelnen
+  Jahren liegt Buy & Hold vorn (z. B. 2019, 2023).
+- Spreads spielen wegen nur etwa 2,0 Wechseln pro Jahr kaum eine Rolle. Das reine TIP-Signal (rund 6 Wechsel pro Jahr)
+  ist empfindlicher, das reine SMA-Signal liegt 2x bei rund 11 % und damit unter Buy & Hold.
+- Die Hebelwährung ändert vor allem einzelne Jahre (EUR-Hebel verdoppelt auch die Wechselkursbewegung), kaum den Vorsprung.
 
 ### Robustheit
 
 Getestet wurden unter anderem Parameter-Overfitting (PBO, Walk-forward, Monte-Carlo),
 Zeitverschiebung der Signale, Hysterese-Bänder, Tagesfilter, SMA-Längen und
-mehrstimmige SMA-Abstimmung. **Ergebnis:** Kein Test stützt belastbar eine Abweichung vom
+mehrstimmige SMA-Abstimmung. Nach Einbau der Spread-Kosten wurde der SMA-Wiedereinstieg neu bewertet: 2 Tage statt 1 Tag
+senkt die Wechsel (2,0 statt 2,4 pro Jahr) und hebt den 2x-Hybrid von 22,5 auf 23,1 % CAGR; 3 Tage ändern das Hybrid-Ergebnis
+kaum mehr (Plateau). **Ergebnis:** Kein Test stützt belastbar eine Abweichung vom
 Standard. Gefundene Vorteile hängen an wenigen Episoden (z. B. Februar 2009, 2015/2022/2023).
 Die Signale tragen im Hybrid nachweislich zum Ergebnis bei (Zeitverschiebungs-Test),
 der Standard liegt aber in einem scharfen Parametergipfel, daher sollten die Erwartungen
@@ -100,13 +145,12 @@ für die Zukunft vorsichtiger sein als die Historie.
 
 | Datei | Zweck |
 |---|---|
-| `canary.py` | **Live-Signal.** Lädt aktuelle Kurse, berechnet TIP-Momentum und NDX-SMA200, filtert und kombiniert sie zum Regime, wählt den besten Kandidaten und gibt Signal-Historie (10 Tage) und Handlungsempfehlung aus. Enthält die Ticker-Konfiguration (`RISK_TICKERS`, `DEFENSIVE_TICKERS`). |
-| `ntfy_push.py` | Liest die Ausgabe von `canary.py` und schickt eine kurze Push-Nachricht über [ntfy](https://ntfy.sh). Ein Regimewechsel erhöht die Priorität. |
+| `canary.py` | **Live-Signal.** Stufe 1: lädt TIP und `^NDX`, berechnet TIP-Momentum und NDX-SMA200, filtert und kombiniert sie zur Regime-Historie (RISK oder DEFENSIVE). Stufe 2 (nur bei RISK): bestimmt den Phasenbeginn, lädt die Risk-Kandidaten und wählt den Kandidaten mit dem besten 13612U-Momentum zum Phasenbeginn. Gibt Signal-Historie (10 Tage) und Handlungsempfehlung aus. Enthält die Ticker-Konfiguration (`RISK_TICKERS`). |
+| `ntfy_push.py` | Liest die Ausgabe von `canary.py` und schickt eine kurze Push-Nachricht über [ntfy](https://ntfy.sh): „RISK: <Ticker>“ oder „DEFENSIVE: Tagesgeld“. Ein Regimewechsel erhöht die Priorität. |
 | `canary.yml` | GitHub-Actions-Workflow (gehört nach `.github/workflows/canary.yml`): installiert Pakete, führt `canary.py` aus, sendet den Push und meldet Fehler. Wird extern gestartet (siehe Einrichtung). |
 | `yf_data.py` | Gemeinsame Kursdaten-Logik für alle Skripte: Abruf über yfinance mit Konsens-Abfrage, Kalender-Vollständigkeitsprüfung, Lückenfüllung aus zuvor bekannten Werten und Korrektur von Kurssprüngen. Kein Datei-Cache, damit rückwirkende Korrekturen von Yahoo ankommen. |
-| `backtest.py` | **Backtest** der Strategie (Hybrid, nur TIP, nur SMA) gegen Buy & Hold, jeweils für 1x und 2x. Enthält die deutsche Steuerlogik, die Jahres- und Defensivphasen-Tabellen und Kennzahlen (CAGR, Drawdown, Sharpe, Capture). Konfiguration der Ticker, Kosten und Datenbereinigung steht im Kopf der Datei. |
-| `backtest_diagnose.py` | Diagnose und **Kalibrierung** des synthetischen Risk-Assets gegen den realen Fonds: Jahresvergleich, Regression (Währungs- und Hebelfaktor), Kostenkalibrierung und Datenprüfung. |
-| `backtest_smaensemble.py` | Test: SMA-Abstimmung über mehrere Längen statt einer einzelnen SMA200. |
+| `backtest.py` | **Backtest** mit rein synthetischem S&P 500 (SPY in EUR, 1x und 2x) statt realer ETF-Kurse. Vermeidet den Zeitversatz zwischen Xetra-Schluss (17:30) und US-Signal (nur rund 60 % der US-Bewegung sind am Xetra-Schluss eingepreist). Kosten zeitvariabel: fixe Kosten + (Hebel − 1) × Zins (FRED), Hebelwährung in `LEVER_CURRENCY` umschaltbar (EUR wie 18MF.DE, USD wie DBPG.DE); Wechselkurs wird von Datenfehlern bereinigt. Risk-off-Phasen ohne Defensiv-Asset werden mit Tagesgeld verzinst (EZB-Einlagensatz abzüglich 0,25 %, nie unter 0 %, täglich nach Abgeltungsteuer). Enthält die deutsche Steuerlogik, die Jahres- und Phasen-Tabellen und Kennzahlen (CAGR, Drawdown, Sharpe, Capture) für Hybrid, nur TIP und nur SMA gegen Buy & Hold, jeweils 1x und 2x. Konfiguration der Kosten und Datenbereinigung steht im Kopf der Datei. |
+| `kalibrierung_hebel.py` | **Kalibrierung des synthetischen Hebel-Modells**: vergleicht SPY (nach EUR umgerechnet, täglich gehebelt) mit 18MF.DE, DBPG.DE (je 2x) sowie SXR8.DE und SXR4.DE (je 1x) und schätzt daraus die fixen Kosten p.a. und die Zinssensitivität (Kosten = fix + (Hebel − 1) × Zins, Zinsreihen von FRED). Testet außerdem, ob der ETF den Wechselkurs mithebelt, misst den Zeitversatz zum US-Schluss und bereinigt eintägige Ausreißer im Wechselkurs. Ergebnis in `kalibrierung/`. TER-Angaben im Kopf der Datei bitte mit den Factsheets abgleichen. |
 | `stats.py` | **Depotauswertung:** liest CSV-Exporte der eigenen Käufe und Verkäufe (`stats/*.csv`), rekonstruiert den Bestand, berechnet Rendite und vergleicht mit Buy-&-Hold-Referenzen inklusive Vorabpauschale. Erzeugt `results.txt` und Plots. |
 | `example.csv` | Beispiel für das CSV-Format von `stats.py` (`date;action;ticker;shares;sum`, Semikolon, Dezimalkomma). |
 | `requirements.txt` | Festgelegte Paketversionen. `yfinance` ist bewusst nur nach unten begrenzt, weil Yahoo seine Schnittstelle regelmäßig ändert. |
@@ -115,17 +159,29 @@ für die Zukunft vorsichtiger sein als die Historie.
 
 ## Modellannahmen des Backtests
 
-- **Synthetisches Risk-Asset** für die Zeit vor den ETF-Notierungen: `SPY` (angepasster Schlusskurs,
-  enthält Dividenden), in EUR umgerechnet und **danach** gehebelt (der echte 2x-Fonds hebelt in EUR),
-  mit Kostenabzug p. a. aus der Kalibrierung gegen die realen Fonds ab 2011: **2x ≈ 2,0 %, 1x ≈ 0,5 %**.
-- **Ab der Notierung** der ETFs (18MF.DE 2010-03-04, SXR4.DE ab 2011-01-01) laufen Strategie und
-  Buy & Hold auf denselben echten Kursen, ohne zusätzliche Kosten.
-  `SXR4.DE` ist vor 2011 wegen fehlerhafter Daten ausgeschlossen.
+- **`backtest.py`:** Das Risk-Asset ist durchgehend synthetisch: `SPY` (angepasster Schlusskurs,
+  enthält Dividenden), in EUR umgerechnet (Wechselkurs `EUR=X`, eintägige Datenfehler bereinigt) und gehebelt.
+  Keine realen ETF-Kurse und keine Verkettung. Kosten zeitvariabel, kalibriert gegen die realen Fonds ab 2011
+  (`kalibrierung_hebel.py`): Tagesrendite = Brutto − (fixe Kosten + (Hebel − 1) × Zins) / 252.
+  **1x:** 0,25 % fix (iShares S&P 500). **2x, Hauptfall (EUR-Hebel wie `18MF.DE`):** 1,20 % fix + Euro-Zins (EZB-Einlagensatz,
+  FRED `ECBDFR`), Zinsdurchleitung 97 %. **2x, Sensitivität (USD-Hebel wie `DBPG.DE`):** 1,58 % fix + US-Zins (`DFF`).
+  Die 1,20 % enthalten rund 0,4 bis 0,5 PP Indexlücke MSCI USA gegen S&P 500 und sind auf SPY-Basis konservativ.
+  Vor 2011 gibt es keine Kalibrierung, dort gelten dieselben Parameter als Annahme.
+- **Frühere Läufe mit realen ETFs (Script entfernt):** Synthetisches Asset (2x ≈ 2,0 %, 1x ≈ 0,5 % flach) vor den ETF-Notierungen,
+  ab Notierung (18MF.DE 2010-03-04, SXR4.DE ab 2011-01-01) die echten Kurse. Wegen des Xetra-Zeitversatzes optimistischer.
+  `18MF.DE` hat am 2013-01-02 einen Kursbruch (Faktor ≈ 282), bei dem `yf_data.py` die Rendite des Bruchtags auf 0 % setzt;
+  dadurch fehlen dort rund 9 %.
 - **Steuern:** 26,375 % Kapitalertragsteuer auf realisierte Gewinne nach Teilfreistellung (30 % bei Aktienfonds),
   Vorabpauschale (Basiszins 2,5 %) zum Jahresende. Strategie und Buy & Hold nutzen dasselbe Steuermodell.
-- **Jahresdeltas** in der Tabelle zeigen auch Steuerverschiebungen: Verkäufe realisieren Gewinne früher
-  als Buy & Hold. Für die Gesamtbewertung zählt das Endergebnis.
-- Nicht modelliert: Spread, Orderkosten, Zinsen auf Cash.
+- **Jahrestabelle:** Jedes Jahr ist isoliert gerechnet (Steuerbasis 1.1., Kapitalertragsteuer nur auf Gewinne seit
+  Jahresbeginn, Vorabpauschale enthalten). „Gesamt (echt)“ und „Durchschnitt p. a. (echt)“ beruhen auf dem
+  durchgehenden Verlauf nach Steuern und enthalten die volle Steuerlast.
+- **Spread:** Bei jedem Wechsel fällt die Hälfte des Geld-Brief-Spreads der verkauften und der gekauften Position an.
+  Startwerte (voller Spread): 1x-ETF 0,05 %, 2x-ETF 0,20 %, Tagesgeld 0. Steuerlich wirkt er wie
+  real (der Verkaufsabschlag mindert den Gewinn). `SPREAD_SCALE` skaliert alle Werte (0 = aus).
+- **Tagesgeld:** In defensiven Phasen `max(EZB-Einlagensatz − 0,25 %, 0)`, täglich nach 26,375 % Steuer
+  gutgeschrieben (ohne Teilfreistellung, ohne Spread, ohne Vorabpauschale). Wirkung rund +0,0 bis +0,2 PP CAGR.
+- Nicht modelliert: Orderkosten, Slippage zwischen Signalschluss und Orderausführung, Sparer-Pauschbetrag, Kirchensteuer.
 
 ---
 
