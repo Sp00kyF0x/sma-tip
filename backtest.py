@@ -5,7 +5,7 @@ Backtest: Hybrid-Strategie (TIP-Canary + Nasdaq-100-SMA200), rein synthetisch
 Das Script rechnet DURCHGEHEND mit einem synthetischen S&P-500-Asset (SPY in
 EUR umgerechnet, ggf. gehebelt) - ohne reale ETF-Kurse und ohne Verkettung.
 Grund: Europäische ETFs werden um 17:30 (Xetra) bewertet, das Signal entsteht
-aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (gegen reale ETFs, Script entfernt)
+aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (kalibrierung_hebel.py, gegen reale ETFs)
 zeigt, dass am Xetra-Schluss nur ca. 60 % der US-Tagesbewegung eingepreist
 sind. Backtests mit realen ETFs sind deshalb optimistisch; der synthetische
 Kurs am US-Schluss entspricht einer Abend-Ausführung.
@@ -137,6 +137,7 @@ Abhängigkeiten:
 from __future__ import annotations
 
 import io
+import re
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -186,7 +187,7 @@ CANARY_TICKER = "TIP"   # iShares TIPS Bond ETF
 # 18MF.DE, Hauptfall; Finanzierung zum Euro-Zins), "USD" = Hebel nur auf den
 # Aktienindex, Wechselkurs 1x (wie DBPG.DE; Finanzierung zum US-Zins).
 LEVER_CURRENCY = "EUR"
-# Kalibrierte Parameter (gegen reale ETFs, Lauf vom 2026-10-20, Script entfernt): fixe Kosten
+# Kalibrierte Parameter (kalibrierung_hebel.py, gegen reale ETFs, Lauf vom 2026-10-20): fixe Kosten
 # p.a. bei Zinsdurchleitung 100 % und die FRED-Zinsreihe der Hebel-Finanzierung.
 LEVER_PARAMS = {
     "EUR": {"fixed_cost_pa": 0.0120, "funding_rate": "ECBDFR"},
@@ -391,29 +392,71 @@ def clean_fx_spikes(fx: pd.Series) -> tuple[pd.Series, list[tuple]]:
 FRED_CACHE_DIR = Path(__file__).resolve().parent / "yf_data"
 
 
-def load_fred_rate(series_id: str) -> pd.Series:
-    """Zinsreihe (Prozent p.a., Tageswerte) von FRED. Bei Erfolg wird die CSV in
-    yf_data/FRED_<ID>.csv zwischengespeichert; schlägt der Abruf fehl, wird der
-    Cache (mit Warnung) genutzt, ohne Cache bricht die Funktion ab."""
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    cache = FRED_CACHE_DIR / f"FRED_{series_id}.csv"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            text = resp.read().decode("utf-8")
-        FRED_CACHE_DIR.mkdir(exist_ok=True)
-        cache.write_text(text, encoding="utf-8")
-    except Exception as exc:                                   # noqa: BLE001
-        if not cache.exists():
-            raise RuntimeError(f"FRED-Abruf für {series_id} fehlgeschlagen ({exc}) und kein "
-                               f"Cache {cache}. CSV manuell von {url} dorthin speichern.") from exc
-        print(f"[warn]     FRED {series_id}: Abruf fehlgeschlagen ({exc}), nutze Cache {cache.name}.")
-        text = cache.read_text(encoding="utf-8")
+class FredUnavailableError(RuntimeError):
+    """FRED nicht erreichbar bzw. liefert keine CSV, und es gibt keinen
+    brauchbaren Cache. Wird in __main__ ohne Traceback gemeldet."""
+
+
+def _describe_failure(exc: Exception) -> str:
+    """Kurze, lesbare Ursache statt Roh-Antwort: bei einer HTML-Seite deren
+    <title> (z.B. 'Site Maintenance | St. Louis Fed'), sonst die Meldung."""
+    msg = str(exc)
+    m = re.search(r"<title>\s*(.*?)\s*<", msg.replace("\\n", " "), re.I)
+    if m and m.group(1):
+        return f"FRED antwortet mit einer Webseite statt Daten: \u201e{m.group(1)}\u201c"
+    if "keine FRED-CSV" in msg:
+        return "FRED antwortet mit einer Webseite statt Daten"
+    return msg
+
+
+def _parse_fred_csv(text: str, series_id: str) -> pd.Series:
+    """Liest eine FRED-CSV (zwei Spalten: Datum, Wert) und prüft vorher das
+    Format. Eine Fehlerseite (HTML, Sperre, leere Antwort) wird so erkannt,
+    statt als kaputte CSV zu scheitern oder in den Cache zu gelangen."""
+    first = text.lstrip().splitlines()[0] if text.strip() else ""
+    if "," not in first or series_id not in first or "<" in first:
+        raise ValueError(f"keine FRED-CSV für {series_id} (Anfang der Antwort: {text.strip()[:120]!r})")
     df = pd.read_csv(io.StringIO(text))
     values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
     out = pd.Series(values.to_numpy(dtype=float), index=pd.to_datetime(df.iloc[:, 0])).dropna().sort_index()
     if out.empty:
         raise ValueError(f"FRED {series_id}: keine Werte.")
     return out
+
+
+def load_fred_rate(series_id: str) -> pd.Series:
+    """Zinsreihe (Prozent p.a., Tageswerte) von FRED. Die Antwort wird erst auf
+    ein gültiges CSV-Format geprüft und dann in yf_data/FRED_<ID>.csv
+    zwischengespeichert (ein vorhandener, gültiger Cache wird also nie durch
+    eine Fehlerseite überschrieben). Schlägt Abruf oder Prüfung fehl, wird der
+    Cache (mit Warnung) genutzt; ohne gültigen Cache bricht die Funktion ab."""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    cache = FRED_CACHE_DIR / f"FRED_{series_id}.csv"
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (taa-backtest)"})
+        with urllib.request.urlopen(request, timeout=30) as resp:
+            text = resp.read().decode("utf-8")
+        out = _parse_fred_csv(text, series_id)
+        FRED_CACHE_DIR.mkdir(exist_ok=True)
+        cache.write_text(text, encoding="utf-8")
+        return out
+    except Exception as exc:                                   # noqa: BLE001
+        reason = _describe_failure(exc)
+        if not cache.exists():
+            raise FredUnavailableError(
+                f"FRED-Daten {series_id} sind aktuell nicht abrufbar und lokal nicht vorhanden.\n"
+                f"  Ursache: {reason}\n"
+                f"  Was tun: sp\u00e4ter erneut starten, oder\n"
+                f"  die CSV im Browser von {url} laden\n"
+                f"  und als {cache} speichern.") from None
+        print(f"[warn]     FRED {series_id}: Abruf fehlgeschlagen ({reason}), nutze Cache {cache.name}.")
+        try:
+            return _parse_fred_csv(cache.read_text(encoding="utf-8"), series_id)
+        except ValueError as cache_exc:
+            raise FredUnavailableError(
+                f"FRED-Daten {series_id}: Abruf fehlgeschlagen ({reason}) und der lokale Cache ist ung\u00fcltig.\n"
+                f"  Was tun: {cache} l\u00f6schen und sp\u00e4ter erneut starten, oder die CSV im Browser\n"
+                f"  von {url} laden und dort speichern.") from None
 
 
 def build_synthetic_eur(spy_usd: pd.Series, eur_per_usd: pd.Series, leverage: float,
@@ -1629,15 +1672,14 @@ def _leverage_suffix(info: dict) -> str:
     return "" if leverage == 1.0 else f" [synth. {leverage:g}x]"
 
 
-def main() -> None:
+def load_market_data() -> dict:
+    """Lädt alle Marktdaten und baut die synthetischen Risk-Assets (SPY ggf.
+    gehebelt, in EUR, siehe build_synthetic_eur()) sowie den Tagesgeld-Zins.
+    Wird von main() und von backtest_sparplan.py genutzt."""
     now_berlin = datetime.now(BERLIN_TZ)
     query_end_date = compute_query_end_date(now_berlin)
     print(f"Aktuelle Zeit (Berlin): {now_berlin.strftime('%Y-%m-%d %H:%M:%S')} "
           f"- Kurse werden bis {query_end_date.date()} abgefragt.\n")
-
-    # Nur der ERSTE Eintrag in RISK_TICKERS bekommt die ausführlichen
-    # Zusatz-Tabellen (siehe Modul-Docstring "Getestete Varianten").
-    primary_ticker = next(iter(RISK_TICKERS))
 
     canary_adj = get_adj_close(CANARY_TICKER, query_end_date)
     trend_adj = get_adj_close(TREND_TICKER, query_end_date)
@@ -1646,8 +1688,7 @@ def main() -> None:
     # Modul-Docstring).
     eur_per_usd = load_eur_per_usd(query_end_date)
 
-    # Synthetische Risk-Assets bauen (SPY ggf. hebeln, in EUR umrechnen,
-    # siehe build_synthetic_eur()). Rohkurse je Yahoo-Ticker nur einmal abrufen.
+    # Synthetische Risk-Assets bauen. Rohkurse je Yahoo-Ticker nur einmal abrufen.
     raw_adj_by_yahoo_ticker: dict[str, pd.Series] = {}
 
     def _raw(yahoo_ticker: str) -> pd.Series:
@@ -1673,6 +1714,23 @@ def main() -> None:
     cash_net_return = tagesgeld_net_daily_return(
         next(iter(risky_adj_by_ticker.values())).index,
         None if TAGESGELD_RATE is None else load_fred_rate(TAGESGELD_RATE))
+
+    return {"canary_adj": canary_adj, "trend_adj": trend_adj,
+            "risky_adj_by_ticker": risky_adj_by_ticker,
+            "cost_text_by_variant": cost_text_by_variant,
+            "cash_net_return": cash_net_return}
+
+
+def main() -> None:
+    # Nur der ERSTE Eintrag in RISK_TICKERS bekommt die ausführlichen
+    # Zusatz-Tabellen (siehe Modul-Docstring "Getestete Varianten").
+    primary_ticker = next(iter(RISK_TICKERS))
+
+    data = load_market_data()
+    canary_adj, trend_adj = data["canary_adj"], data["trend_adj"]
+    risky_adj_by_ticker = data["risky_adj_by_ticker"]
+    cost_text_by_variant = data["cost_text_by_variant"]
+    cash_net_return = data["cash_net_return"]
 
     # --- Backtest je Variante und Strategie ---
     results_by_label: dict[str, dict[str, dict]] = {
@@ -1827,5 +1885,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FredUnavailableError as err:
+        print(f"\n[Abbruch] {err}")
+        input("\nEnter zum Beenden dr\u00fccken...")
+        raise SystemExit(1)
     input("\nFertig - Enter zum Beenden drücken...")

@@ -43,8 +43,8 @@ Regime = DEFENSIV   nur wenn beide Signale nicht RISK melden (gehalten wird dann
 ```
 
 Die ODER-Verknüpfung ist der Kern: Das Trendsignal wirkt praktisch nur dann, wenn das
-TIP-Signal bereits defensiv ist. Dadurch wechselt der Hybrid mit etwa **2,4 Wechseln pro Jahr**
-deutlich seltener als die Einzelsignale (je rund 6).
+TIP-Signal bereits defensiv ist. Dadurch wechselt der Hybrid mit etwa **2 Wechseln pro Jahr**
+deutlich seltener als die Einzelsignale (TIP rund 6, SMA rund 5).
 
 ### Whipsaw-Filter (Bestätigung)
 
@@ -55,7 +55,7 @@ Ein neues Signal gilt erst nach mehreren aufeinanderfolgenden Handelstagen als b
 | TIP | 1 Tag | 2 Tage |
 | SMA | 1 Tag | 2 Tage |
 
-Hysterese-Bänder um den SMA wurden getestet und bewusst **nicht** übernommen (siehe unten).
+Hysterese-Bänder um den SMA wurden getestet und bewusst **nicht** übernommen (siehe „Robustheit“).
 
 ### Was gehalten wird
 
@@ -132,15 +132,14 @@ Die Strategie heißt in der Ausgabe von `backtest.py` „TIPxSMA“. Zeitraum bi
 
 ### Robustheit
 
-Getestet wurden unter anderem Parameter-Overfitting (PBO, Walk-forward, Monte-Carlo),
-Zeitverschiebung der Signale, Hysterese-Bänder, Tagesfilter, SMA-Längen und
-mehrstimmige SMA-Abstimmung. Nach Einbau der Spread-Kosten wurde der SMA-Wiedereinstieg neu bewertet: 2 Tage statt 1 Tag
-senkt die Wechsel (2,0 statt 2,4 pro Jahr) und hebt den 2x-Hybrid von 22,5 auf 23,1 % CAGR; 3 Tage ändern das Hybrid-Ergebnis
-kaum mehr (Plateau). **Ergebnis:** Kein Test stützt belastbar eine Abweichung vom
-Standard. Gefundene Vorteile hängen an wenigen Episoden (z. B. Februar 2009, 2015/2022/2023).
-Die Signale tragen im Hybrid nachweislich zum Ergebnis bei (Zeitverschiebungs-Test),
-der Standard liegt aber in einem scharfen Parametergipfel, daher sollten die Erwartungen
-für die Zukunft vorsichtiger sein als die Historie.
+Diverse Tests haben keine zusätzlichen Parameter bestätigt, die über den Standard hinaus etwas verbessern:
+Hysterese-Bänder um den SMA, Tagesfilter, mehrstimmige SMA-Abstimmung, Zeitverschiebung der Signale,
+ein Drawdown-Signal (Kurs unter einem Anteil des k-Tage-Hochs) statt des SMA sowie Parameter-Overfitting-Prüfungen
+(PBO, Walk-forward, Monte-Carlo). Die SMA-Länge von 50 bis 350 Tagen zeigt ein breites Plateau; die SMA200 liegt darauf
+und bleibt der Standard. Gefundene Vorteile hingen jeweils an wenigen Episoden (z. B. Februar 2009, 2015/2022/2023).
+Der einzige übernommene Wert aus dieser Suche ist die Bestätigung beim SMA-Wiedereinstieg (2 statt 1 Tag, weniger Wechsel).
+Die Signale tragen im Hybrid nachweislich zum Ergebnis bei (Zeitverschiebungs-Test), der Standard liegt aber nahe an
+einem Parametergipfel, daher sollten die Erwartungen für die Zukunft vorsichtiger sein als die Historie.
 
 ---
 
@@ -153,6 +152,8 @@ für die Zukunft vorsichtiger sein als die Historie.
 | `canary.yml` | GitHub-Actions-Workflow (gehört nach `.github/workflows/canary.yml`): installiert Pakete, führt `canary.py` aus, sendet den Push und meldet Fehler. Wird extern gestartet (siehe Einrichtung). |
 | `yf_data.py` | Gemeinsame Kursdaten-Logik für alle Skripte: Abruf über yfinance mit Konsens-Abfrage, Kalender-Vollständigkeitsprüfung, Lückenfüllung aus zuvor bekannten Werten und Korrektur von Kurssprüngen. Kein Datei-Cache, damit rückwirkende Korrekturen von Yahoo ankommen. |
 | `backtest.py` | **Backtest** mit rein synthetischem S&P 500 (SPY in EUR, 1x und 2x) statt realer ETF-Kurse. Vermeidet den Zeitversatz zwischen Xetra-Schluss (17:30) und US-Signal (nur rund 60 % der US-Bewegung sind am Xetra-Schluss eingepreist). Kosten zeitvariabel: fixe Kosten + (Hebel − 1) × Zins (FRED), Hebelwährung in `LEVER_CURRENCY` umschaltbar (EUR wie 18MF.DE, USD wie DBPG.DE); Wechselkurs wird von Datenfehlern bereinigt. Risk-off-Phasen ohne Defensiv-Asset werden mit Tagesgeld verzinst (EZB-Einlagensatz abzüglich 0,25 %, nie unter 0 %, täglich nach Abgeltungsteuer). Enthält die deutsche Steuerlogik, die Jahres- und Phasen-Tabellen und Kennzahlen (CAGR, Drawdown, Sharpe, Capture) für Hybrid, nur TIP und nur SMA gegen Buy & Hold, jeweils 1x und 2x. Konfiguration der Kosten und Datenbereinigung steht im Kopf der Datei. |
+| `backtest_sparplan.py` | **Sparplan-Variante** des Backtests (nutzt `backtest.py`): fester Monatsbeitrag am ersten Handelstag, verglichen für „in Defensiv-Phasen weiter ins Risk-Asset“ gegen „in Defensiv-Phasen aufs Tagesgeld“ sowie Buy & Hold. Ausgewiesen werden Endwert (auch nach fiktiver Liquidation), IRR und zeitgewichtete Kennzahlen, jeweils nach Steuern. Beitrag und Startkapital stehen im Kopf der Datei. |
+| `kalibrierung_hebel.py` | **Kalibrierung** des synthetischen Hebel-Modells: schätzt aus echten ETFs (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE) gegen SPY die fixen Kosten, die Zinsdurchleitung, die Hebelwährung und den Xetra-Zeitversatz (FRED-Zinsen, Newey-West-Regression). Liefert die Kostenparameter für `backtest.py`; Ausgabe unter `kalibrierung/`. |
 | `stats.py` | **Depotauswertung:** liest CSV-Exporte der eigenen Käufe und Verkäufe (`stats/*.csv`), rekonstruiert den Bestand, berechnet Rendite und vergleicht mit Buy-&-Hold-Referenzen inklusive Vorabpauschale. Erzeugt `results.txt` und Plots. |
 | `example.csv` | Beispiel für das CSV-Format von `stats.py` (`date;action;ticker;shares;sum`, Semikolon, Dezimalkomma). |
 | `requirements.txt` | Festgelegte Paketversionen. `yfinance` ist bewusst nur nach unten begrenzt, weil Yahoo seine Schnittstelle regelmäßig ändert. |
@@ -164,7 +165,7 @@ für die Zukunft vorsichtiger sein als die Historie.
 - **`backtest.py`:** Das Risk-Asset ist durchgehend synthetisch: `SPY` (angepasster Schlusskurs,
   enthält Dividenden), in EUR umgerechnet (Wechselkurs `EUR=X`, eintägige Datenfehler bereinigt) und gehebelt.
   Keine realen ETF-Kurse und keine Verkettung. Kosten zeitvariabel, kalibriert gegen die realen Fonds ab 2011
-  (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE; Kalibrierungs-Script entfernt): Tagesrendite = Brutto − (fixe Kosten + (Hebel − 1) × Zins) / 252.
+  (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE; Script `kalibrierung_hebel.py`): Tagesrendite = Brutto − (fixe Kosten + (Hebel − 1) × Zins) / 252.
   **1x:** 0,25 % fix (iShares S&P 500). **2x, Hauptfall (EUR-Hebel wie `18MF.DE`):** 1,20 % fix + Euro-Zins (EZB-Einlagensatz,
   FRED `ECBDFR`), Zinsdurchleitung 97 %. **2x, Sensitivität (USD-Hebel wie `DBPG.DE`):** 1,58 % fix + US-Zins (`DFF`).
   Die 1,20 % enthalten rund 0,4 bis 0,5 PP Indexlücke MSCI USA gegen S&P 500 und sind auf SPY-Basis konservativ.
