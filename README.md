@@ -87,7 +87,7 @@ unabhängig vom Regime, auch über Tagesgeld-Phasen hinweg.
 
 ### Ausführung
 
-Das Script läuft nach US-Börsenschluss (Sicherheitspuffer bis 16:05 New Yorker Zeit).
+Das Script läuft nach US-Börsenschluss (Sicherheitspuffer bis 16:04 New Yorker Zeit).
 Das mit dem **heutigen** Schlusskurs bestätigte Regime ist die Grundlage für die Order am Abend.
 Im Backtest wirkt das Signal von Tag *d−1* an Tag *d* (kein Look-Ahead).
 

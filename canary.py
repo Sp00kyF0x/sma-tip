@@ -129,7 +129,7 @@ Börsenschluss einen unfertigen Intraday-Stand statt des Schlusskurses):
   Der reguläre Handelsschluss von NYSE/Nasdaq (TIP) liegt bei 16:00 Uhr
   New Yorker Zeit (meist 22:00 Uhr deutscher Zeit, in den Wochen mit
   abweichender Sommerzeit-Umstellung 21:00 Uhr). Maßgeblich ist die New
-  Yorker Zeit: SAFE_EVALUATION_TIME_NY = 16:05 Uhr ist ein Sicherheits-
+  Yorker Zeit: SAFE_EVALUATION_TIME_NY = 16:04 Uhr ist ein Sicherheits-
   puffer. Wird das Script davor ausgeführt, wird als Abfrage-Enddatum
   der letzte VOLLSTÄNDIGE Handelstag verwendet (siehe
   compute_query_end_date()). Zusätzlich verwirft load_prices() eine ggf.
