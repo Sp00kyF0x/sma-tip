@@ -219,7 +219,7 @@ CONFIRMATION_B = 2  # hin zu RISK
 # eigene Bestätigungsfenster (gleiche Bedeutung wie oben).
 TREND_SMA_DAYS = 200
 TREND_CONFIRMATION_A = 1  # weg von RISK
-TREND_CONFIRMATION_B = 2  # hin zu RISK
+TREND_CONFIRMATION_B = 3  # hin zu RISK
 
 # Anzahl der zuletzt angezeigten Tage in der Signal-Historie.
 DISPLAY_LAST_N_DAYS = 10
