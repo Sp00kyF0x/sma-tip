@@ -11,13 +11,15 @@ Exporte. Das Script arbeitet in zwei Stufen:
     Momentum und das NDX-SMA200-Trendsignal, filtert beide getrennt
     (Whipsaw) und kombiniert sie zur Hybrid-Logik (siehe unten) zum
     Regime RISK / DEFENSIVE - für JEDEN Tag der Historie.
-  Stufe 2 - Risk-Assets (nur im Regime RISK):
-    Aus der Regime-Historie wird der Beginn der aktuellen Risk-Phase
-    bestimmt. Erst dann werden die Kurse der Kandidaten geladen (ab einem
-    Datum so weit vor dem Phasenbeginn, dass das 13612U-Momentum dort
-    berechenbar ist) und der Kandidat zum PHASENBEGINN ausgewählt. Im
-    Regime DEFENSIVE werden keine Kandidaten abgefragt und kein Momentum
-    berechnet.
+  Stufe 2 - Risk-Assets:
+    Im Regime RISK wird aus der Regime-Historie der Beginn der aktuellen
+    Risk-Phase bestimmt. Erst dann werden die Kurse der Kandidaten geladen
+    (ab einem Datum so weit vor dem Phasenbeginn, dass das 13612U-Momentum
+    dort berechenbar ist) und der Kandidat zum PHASENBEGINN ausgewählt. Im
+    Regime DEFENSIVE werden die Kandidaten nur zur Information geladen und
+    ihr heutiges Momentum angezeigt (Empfehlung bleibt Tagesgeld; die
+    Auswahl trifft erst der Tag, an dem RISK bestätigt wird). Scheitert
+    dieser Abruf, gibt es eine [info]-Zeile, das Signal bleibt gültig.
   Danach: Signal-Historie der letzten 10 Handelstage (TIP-Signal, Abstand
   des NDX-Kurses zur SMA200, SMA-Signal, Hybrid-Regime) und ein kurzes
   Fazit mit dem aktuell bestätigten Regime, den tragenden Signalen und
@@ -129,7 +131,7 @@ Börsenschluss einen unfertigen Intraday-Stand statt des Schlusskurses):
   Der reguläre Handelsschluss von NYSE/Nasdaq (TIP) liegt bei 16:00 Uhr
   New Yorker Zeit (meist 22:00 Uhr deutscher Zeit, in den Wochen mit
   abweichender Sommerzeit-Umstellung 21:00 Uhr). Maßgeblich ist die New
-  Yorker Zeit: SAFE_EVALUATION_TIME_NY = 16:04 Uhr ist ein Sicherheits-
+  Yorker Zeit: SAFE_EVALUATION_TIME_NY = 16:05 Uhr ist ein Sicherheits-
   puffer. Wird das Script davor ausgeführt, wird als Abfrage-Enddatum
   der letzte VOLLSTÄNDIGE Handelstag verwendet (siehe
   compute_query_end_date()). Zusätzlich verwirft load_prices() eine ggf.
@@ -219,7 +221,7 @@ CONFIRMATION_B = 2  # hin zu RISK
 # eigene Bestätigungsfenster (gleiche Bedeutung wie oben).
 TREND_SMA_DAYS = 200
 TREND_CONFIRMATION_A = 1  # weg von RISK
-TREND_CONFIRMATION_B = 3  # hin zu RISK
+TREND_CONFIRMATION_B = 2  # hin zu RISK
 
 # Anzahl der zuletzt angezeigten Tage in der Signal-Historie.
 DISPLAY_LAST_N_DAYS = 10
@@ -574,7 +576,7 @@ def main() -> None:
     trend_state = trend_conf.iloc[-1]
 
     # ==================================================================
-    # Stufe 2: Risk-Kandidaten (nur im Regime RISK)
+    # Stufe 2: Risk-Kandidaten (im Regime RISK Auswahl, sonst nur Information)
     # ==================================================================
     chosen = None            # (Ticker, Score, Methode)
     phase_start = None
@@ -607,6 +609,24 @@ def main() -> None:
                               for t, d in risk_data.items()})
         chosen = select_best_candidate(list(RISK_TICKERS), risk_data, moms_at_selection, selection_date)
         top_today = select_best_candidate(list(RISK_TICKERS), risk_data, moms_today, today)
+    else:
+        # Nur Information: heutiges Momentum der Kandidaten. Ein Fehler hier darf das Signal nicht verhindern.
+        candidates_start = today - pd.Timedelta(days=CANDIDATE_WARMUP_CALENDAR_DAYS)
+        try:
+            risk_data = {t: load_ticker(t, candidates_start, query_end_date) for t in RISK_TICKERS}
+            for t, d in risk_data.items():
+                if d["dropped_today"]:
+                    print(f"[info] {ALL_TICKER_NAMES[t]}: heutiger Kurs verworfen "
+                          f"(Sicherheitsregel, siehe Docstring), letzter berücksichtigter "
+                          f"Handelstag: {d['prices'].index[-1].date()}")
+            moms_today = {t: candidate_momenta(d["prices"], today) for t, d in risk_data.items()}
+            top_today = select_best_candidate(list(RISK_TICKERS), risk_data, moms_today, today)
+        except Exception as exc:                                   # noqa: BLE001
+            # [info] statt [warn]: reine Information, soll keine Warnung in der Push-Nachricht auslösen
+            print(f"[info] Momentum der Risk-Kandidaten nicht verfügbar ({exc}); "
+                  f"das Signal ist davon nicht betroffen.")
+            moms_today = {}
+        print()
 
     if trend["prices"].index[-1] != today:
         print(f"[warn] Letzter Kurs von {ALL_TICKER_NAMES[TREND_TICKER]} ist "
@@ -652,6 +672,14 @@ def main() -> None:
                   f"der Risk-Phase.")
     else:
         print("Empfehlung: Tagesgeld")
+        if moms_today:
+            leader = top_today[0]
+            # bewusst nicht "Heute vorn:" (diese Zeile wertet ntfy_push.py nur im Regime RISK aus)
+            print(f"Momentum-Spitzenreiter heute (nur Information): {leader} | {ALL_TICKER_NAMES[leader]}")
+            print_momentum_table(f"Momentum der Risk-Kandidaten heute ({today.date()}, nur Information)",
+                                 RISK_TICKERS, moms_today, {leader: "heute vorne"})
+            print("\nHinweis: Im Regime DEFENSIVE wird nichts gekauft. Wechselt das Regime zu RISK, wird der "
+                  "Kandidat am Tag des bestätigten Wechsels ausgewählt - das Ranking kann sich bis dahin ändern.")
 
     # --- Hinweis auf im Aufbau befindlichen Regimewechsel ---
     tip_pending = None

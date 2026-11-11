@@ -87,7 +87,7 @@ unabhängig vom Regime, auch über Tagesgeld-Phasen hinweg.
 
 ### Ausführung
 
-Das Script läuft nach US-Börsenschluss (Sicherheitspuffer bis 16:04 New Yorker Zeit).
+Das Script läuft nach US-Börsenschluss (Sicherheitspuffer bis 16:05 New Yorker Zeit).
 Das mit dem **heutigen** Schlusskurs bestätigte Regime ist die Grundlage für die Order am Abend.
 Im Backtest wirkt das Signal von Tag *d−1* an Tag *d* (kein Look-Ahead).
 
@@ -151,6 +151,7 @@ einem Parametergipfel, daher sollten die Erwartungen für die Zukunft vorsichtig
 | `ntfy_push.py` | Liest die Ausgabe von `canary.py` und schickt eine kurze Push-Nachricht über [ntfy](https://ntfy.sh): „RISK: <Ticker>“ oder „DEFENSIVE: Tagesgeld“. Ein Regimewechsel erhöht die Priorität. |
 | `canary.yml` | GitHub-Actions-Workflow (gehört nach `.github/workflows/canary.yml`): installiert Pakete, führt `canary.py` aus, sendet den Push und meldet Fehler. Wird extern gestartet (siehe Einrichtung). |
 | `yf_data.py` | Gemeinsame Kursdaten-Logik für alle Skripte: Abruf über yfinance mit Konsens-Abfrage, Kalender-Vollständigkeitsprüfung, Lückenfüllung aus zuvor bekannten Werten und Korrektur von Kurssprüngen. Kein Datei-Cache, damit rückwirkende Korrekturen von Yahoo ankommen. |
+| `fred_data.py` | Gemeinsame Zinsreihen-Logik (FRED, `ECBDFR` und `DFF`) für `backtest.py` und `kalibrierung_hebel.py`: Abruf mit Wiederholungen, Formatprüfung vor dem Speichern, Cache in `yf_data/` mit Altersangabe bei Ausfall. |
 | `backtest.py` | **Backtest** mit rein synthetischem S&P 500 (SPY in EUR, 1x und 2x) statt realer ETF-Kurse. Vermeidet den Zeitversatz zwischen Xetra-Schluss (17:30) und US-Signal (nur rund 60 % der US-Bewegung sind am Xetra-Schluss eingepreist). Kosten zeitvariabel: fixe Kosten + (Hebel − 1) × Zins (FRED), Hebelwährung in `LEVER_CURRENCY` umschaltbar (EUR wie 18MF.DE, USD wie DBPG.DE); Wechselkurs wird von Datenfehlern bereinigt. Risk-off-Phasen ohne Defensiv-Asset werden mit Tagesgeld verzinst (EZB-Einlagensatz abzüglich 0,25 %, nie unter 0 %, täglich nach Abgeltungsteuer). Enthält die deutsche Steuerlogik, die Jahres- und Phasen-Tabellen und Kennzahlen (CAGR, Drawdown, Sharpe, Capture) für Hybrid, nur TIP und nur SMA gegen Buy & Hold, jeweils 1x und 2x. Konfiguration der Kosten und Datenbereinigung steht im Kopf der Datei. |
 | `kalibrierung_hebel.py` | **Kalibrierung** des synthetischen Hebel-Modells: schätzt aus echten ETFs (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE) gegen SPY die fixen Kosten, die Zinsdurchleitung, die Hebelwährung und den Xetra-Zeitversatz (FRED-Zinsen, Newey-West-Regression). Liefert die Kostenparameter für `backtest.py`; Ausgabe unter `kalibrierung/`. |
 | `stats.py` | **Depotauswertung:** liest CSV-Exporte der eigenen Käufe und Verkäufe (`stats/*.csv`), rekonstruiert den Bestand, berechnet Rendite und vergleicht mit Buy-&-Hold-Referenzen inklusive Vorabpauschale. Erzeugt `results.txt` und Plots. |

@@ -40,7 +40,7 @@ Methode:
     (Tagesbewegung > SPIKE_THRESHOLD, die am Folgetag zurückläuft); gefundene
     Tage werden ausgegeben. Mehrtägige Fehler erkennt das nicht.
 
-Zinsreihen: FRED (öffentlicher CSV-Export, Internet nötig; Cache in yf_data/FRED_<ID>.csv wie in backtest.py, bei Ausfall mit Cache weiterrechnen oder klare Meldung): USD "DFF" (Fed
+Zinsreihen: FRED (öffentlicher CSV-Export, Internet nötig; Abruf über fred_data.py, Cache in yf_data/FRED_<ID>.csv wie in backtest.py, bei Ausfall mit Cache weiterrechnen oder klare Meldung): USD "DFF" (Fed
 Funds), EUR "ECBDFR" (EZB-Einlagezins; €STR lag nach 2019 etwas darunter,
 EONIA davor etwas darüber - Näherung, einmalig in den Ergebnissen zu
 berücksichtigen). TER-Angaben in PRODUCTS bitte mit den Factsheets abgleichen.
@@ -52,9 +52,6 @@ Aufruf: python kalibrierung_hebel.py
 
 from __future__ import annotations
 
-import io
-import re
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -67,6 +64,7 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
+from fred_data import FredUnavailableError, load_fred_rate
 from yf_data import (
     BERLIN_TZ,
     compute_query_end_date,
@@ -125,77 +123,6 @@ def load_etf(key: str, cfg: dict, query_end_date: pd.Timestamp) -> pd.Series:
     etf = get_adj_close(key, query_end_date)
     start = max(pd.Timestamp(START_FROM), pd.Timestamp(cfg.get("usable_from", START_FROM)))
     return etf.loc[etf.index >= start]
-
-
-FRED_CACHE_DIR = Path(__file__).resolve().parent / "yf_data"   # gemeinsam mit backtest.py
-
-
-class FredUnavailableError(RuntimeError):
-    """FRED nicht erreichbar bzw. liefert keine CSV, und es gibt keinen
-    brauchbaren Cache. Wird in __main__ ohne Traceback gemeldet."""
-
-
-def _describe_failure(exc: Exception) -> str:
-    """Kurze, lesbare Ursache statt Roh-Antwort: bei einer HTML-Seite deren
-    <title> (z.B. 'Site Maintenance | St. Louis Fed'), sonst die Meldung."""
-    msg = str(exc)
-    m = re.search(r"<title>\s*(.*?)\s*<", msg.replace("\\n", " "), re.I)
-    if m and m.group(1):
-        return f"FRED antwortet mit einer Webseite statt Daten: \u201e{m.group(1)}\u201c"
-    if "keine FRED-CSV" in msg:
-        return "FRED antwortet mit einer Webseite statt Daten"
-    return msg
-
-
-def parse_fred_csv(text: str, series_id: str) -> pd.Series:
-    """FRED-CSV (Datum, Wert) in eine Serie in PROZENT; "." wird verworfen. Das
-    Format wird vorher geprüft, damit eine Fehlerseite (HTML, Sperre, leere
-    Antwort) erkannt wird und nicht in den Cache gelangt."""
-    first = text.lstrip().splitlines()[0] if text.strip() else ""
-    if "," not in first or series_id not in first or "<" in first:
-        raise ValueError(f"keine FRED-CSV f\u00fcr {series_id} (Anfang der Antwort: {text.strip()[:120]!r})")
-    df = pd.read_csv(io.StringIO(text))
-    values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
-    out = pd.Series(values.to_numpy(dtype=float), index=pd.to_datetime(df.iloc[:, 0])).dropna().sort_index()
-    if out.empty:
-        raise ValueError(f"FRED {series_id}: keine Werte.")
-    return out
-
-
-def load_fred_rate(series_id: str) -> pd.Series:
-    """Zinsreihe (Prozent p.a.) von FRED. Die Antwort wird erst auf ein gültiges
-    CSV-Format geprüft und dann in yf_data/FRED_<ID>.csv zwischengespeichert
-    (derselbe Cache wie in backtest.py; ein gültiger Cache wird nie durch eine
-    Fehlerseite überschrieben). Schlägt Abruf oder Prüfung fehl, wird der Cache
-    (mit Warnung) genutzt; ohne gültigen Cache bricht die Funktion mit
-    FredUnavailableError ab."""
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    cache = FRED_CACHE_DIR / f"FRED_{series_id}.csv"
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (taa-kalibrierung)"})
-        with urllib.request.urlopen(request, timeout=30) as resp:
-            text = resp.read().decode("utf-8")
-        out = parse_fred_csv(text, series_id)
-        FRED_CACHE_DIR.mkdir(exist_ok=True)
-        cache.write_text(text, encoding="utf-8")
-        return out
-    except Exception as exc:                                   # noqa: BLE001
-        reason = _describe_failure(exc)
-        if not cache.exists():
-            raise FredUnavailableError(
-                f"FRED-Daten {series_id} sind aktuell nicht abrufbar und lokal nicht vorhanden.\n"
-                f"  Ursache: {reason}\n"
-                f"  Was tun: sp\u00e4ter erneut starten, oder\n"
-                f"  die CSV im Browser von {url} laden\n"
-                f"  und als {cache} speichern.") from None
-        print(f"[warn]     FRED {series_id}: Abruf fehlgeschlagen ({reason}), nutze Cache {cache.name}.")
-        try:
-            return parse_fred_csv(cache.read_text(encoding="utf-8"), series_id)
-        except ValueError:
-            raise FredUnavailableError(
-                f"FRED-Daten {series_id}: Abruf fehlgeschlagen ({reason}) und der lokale Cache ist ung\u00fcltig.\n"
-                f"  Was tun: {cache} l\u00f6schen und sp\u00e4ter erneut starten, oder die CSV im Browser\n"
-                f"  von {url} laden und dort speichern.") from None
 
 
 def clean_fx_spikes(fx: pd.Series, threshold: float) -> tuple[pd.Series, list[tuple]]:
@@ -497,7 +424,7 @@ def run() -> None:
     fx_on_spy = fx.reindex(spy.index.union(fx.index)).ffill().reindex(spy.index).dropna()
     spy = spy.loc[fx_on_spy.index]
 
-    rates = {cur: load_fred_rate(sid) for cur, sid in FRED_RATES.items()}
+    rates = {cur: load_fred_rate(sid, needed_from=spy.index.min()) for cur, sid in FRED_RATES.items()}
 
     results: dict = {}
     plot_data: list = []

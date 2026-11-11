@@ -38,7 +38,7 @@ Kostenmodell des synthetischen Assets (zeitvariabel, siehe build_synthetic_eur()
   Tagesrendite = Brutto-Rendite - (fixe Kosten + (Hebel-1) * Zins(t)) / 252
   - fixe Kosten aus der Kalibrierung: 1x 0,25 % p.a. (SXR8-Niveau), 2x 1,20 % p.a.
     (18MF.DE, Hebel in EUR, Zins ECBDFR) bzw. 1,58 % p.a. (DBPG.DE, Hebel in USD,
-    Zins DFF). Zinsreihen kommen von FRED (Cache in yf_data/FRED_<ID>.csv).
+    Zins DFF). Zinsreihen kommen von FRED über fred_data.py (Cache in yf_data/FRED_<ID>.csv).
   - LEVER_CURRENCY = "EUR": der Hebel wirkt auch auf den Wechselkurs (wie 18MF.DE,
     Hauptfall); "USD": Hebel nur auf den Aktienindex, Wechselkurs 1x (wie DBPG.DE).
   - Vor 2011 gibt es keine Kalibrierung; dieselben Parameter gelten als Annahme.
@@ -136,9 +136,6 @@ Abhängigkeiten:
 
 from __future__ import annotations
 
-import io
-import re
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -151,6 +148,7 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
+from fred_data import FRED_CACHE_DIR, FredUnavailableError, load_fred_rate   # noqa: F401
 from yf_data import (
     BERLIN_TZ,
     compute_query_end_date,
@@ -387,76 +385,6 @@ def clean_fx_spikes(fx: pd.Series) -> tuple[pd.Series, list[tuple]]:
             found.append((fx.index[i], r1, r2))
             values[i] = values[i - 1]
     return pd.Series(values, index=fx.index), found
-
-
-FRED_CACHE_DIR = Path(__file__).resolve().parent / "yf_data"
-
-
-class FredUnavailableError(RuntimeError):
-    """FRED nicht erreichbar bzw. liefert keine CSV, und es gibt keinen
-    brauchbaren Cache. Wird in __main__ ohne Traceback gemeldet."""
-
-
-def _describe_failure(exc: Exception) -> str:
-    """Kurze, lesbare Ursache statt Roh-Antwort: bei einer HTML-Seite deren
-    <title> (z.B. 'Site Maintenance | St. Louis Fed'), sonst die Meldung."""
-    msg = str(exc)
-    m = re.search(r"<title>\s*(.*?)\s*<", msg.replace("\\n", " "), re.I)
-    if m and m.group(1):
-        return f"FRED antwortet mit einer Webseite statt Daten: \u201e{m.group(1)}\u201c"
-    if "keine FRED-CSV" in msg:
-        return "FRED antwortet mit einer Webseite statt Daten"
-    return msg
-
-
-def _parse_fred_csv(text: str, series_id: str) -> pd.Series:
-    """Liest eine FRED-CSV (zwei Spalten: Datum, Wert) und prüft vorher das
-    Format. Eine Fehlerseite (HTML, Sperre, leere Antwort) wird so erkannt,
-    statt als kaputte CSV zu scheitern oder in den Cache zu gelangen."""
-    first = text.lstrip().splitlines()[0] if text.strip() else ""
-    if "," not in first or series_id not in first or "<" in first:
-        raise ValueError(f"keine FRED-CSV für {series_id} (Anfang der Antwort: {text.strip()[:120]!r})")
-    df = pd.read_csv(io.StringIO(text))
-    values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
-    out = pd.Series(values.to_numpy(dtype=float), index=pd.to_datetime(df.iloc[:, 0])).dropna().sort_index()
-    if out.empty:
-        raise ValueError(f"FRED {series_id}: keine Werte.")
-    return out
-
-
-def load_fred_rate(series_id: str) -> pd.Series:
-    """Zinsreihe (Prozent p.a., Tageswerte) von FRED. Die Antwort wird erst auf
-    ein gültiges CSV-Format geprüft und dann in yf_data/FRED_<ID>.csv
-    zwischengespeichert (ein vorhandener, gültiger Cache wird also nie durch
-    eine Fehlerseite überschrieben). Schlägt Abruf oder Prüfung fehl, wird der
-    Cache (mit Warnung) genutzt; ohne gültigen Cache bricht die Funktion ab."""
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    cache = FRED_CACHE_DIR / f"FRED_{series_id}.csv"
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (taa-backtest)"})
-        with urllib.request.urlopen(request, timeout=30) as resp:
-            text = resp.read().decode("utf-8")
-        out = _parse_fred_csv(text, series_id)
-        FRED_CACHE_DIR.mkdir(exist_ok=True)
-        cache.write_text(text, encoding="utf-8")
-        return out
-    except Exception as exc:                                   # noqa: BLE001
-        reason = _describe_failure(exc)
-        if not cache.exists():
-            raise FredUnavailableError(
-                f"FRED-Daten {series_id} sind aktuell nicht abrufbar und lokal nicht vorhanden.\n"
-                f"  Ursache: {reason}\n"
-                f"  Was tun: sp\u00e4ter erneut starten, oder\n"
-                f"  die CSV im Browser von {url} laden\n"
-                f"  und als {cache} speichern.") from None
-        print(f"[warn]     FRED {series_id}: Abruf fehlgeschlagen ({reason}), nutze Cache {cache.name}.")
-        try:
-            return _parse_fred_csv(cache.read_text(encoding="utf-8"), series_id)
-        except ValueError as cache_exc:
-            raise FredUnavailableError(
-                f"FRED-Daten {series_id}: Abruf fehlgeschlagen ({reason}) und der lokale Cache ist ung\u00fcltig.\n"
-                f"  Was tun: {cache} l\u00f6schen und sp\u00e4ter erneut starten, oder die CSV im Browser\n"
-                f"  von {url} laden und dort speichern.") from None
 
 
 def build_synthetic_eur(spy_usd: pd.Series, eur_per_usd: pd.Series, leverage: float,
@@ -1704,16 +1632,22 @@ def load_market_data() -> dict:
         if info["leverage"] != 1.0:
             rid = info["funding_rate"]
             if rid not in rate_cache:
-                rate_cache[rid] = load_fred_rate(rid)
+                rate_cache[rid] = load_fred_rate(
+                    rid, needed_from=max(_raw(info["ticker"]).index.min(), eur_per_usd.index.min()))
             rate_pct = rate_cache[rid]
         risky_adj_by_ticker[variant], cost_text_by_variant[variant] = build_synthetic_eur(
             _raw(info["ticker"]), eur_per_usd, info["leverage"], info["fixed_cost_pa"],
             rate_pct, info["lever_currency"])
 
     # Tagesgeld-Zins für Cash-Phasen (nach Steuer), auf dem Kalender des Risk-Assets.
-    cash_net_return = tagesgeld_net_daily_return(
-        next(iter(risky_adj_by_ticker.values())).index,
-        None if TAGESGELD_RATE is None else load_fred_rate(TAGESGELD_RATE))
+    # Dieselbe Reihe (z. B. ECBDFR) dient auch als Finanzierungszins: nicht erneut abrufen.
+    cash_calendar = next(iter(risky_adj_by_ticker.values())).index
+    cash_rate = None
+    if TAGESGELD_RATE is not None:
+        if TAGESGELD_RATE not in rate_cache:
+            rate_cache[TAGESGELD_RATE] = load_fred_rate(TAGESGELD_RATE, needed_from=cash_calendar[0])
+        cash_rate = rate_cache[TAGESGELD_RATE]
+    cash_net_return = tagesgeld_net_daily_return(cash_calendar, cash_rate)
 
     return {"canary_adj": canary_adj, "trend_adj": trend_adj,
             "risky_adj_by_ticker": risky_adj_by_ticker,
