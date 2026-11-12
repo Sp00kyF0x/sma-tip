@@ -11,7 +11,7 @@ Ablauf von load_fred_rate(series_id):
   2. Format-Prüfung der Antwort VOR dem Speichern: Eine Fehlerseite (HTML, Sperre, leere Antwort) wird erkannt und
      gelangt nie in den Cache. Zusätzlich darf die neue Reihe nicht kürzer sein als der vorhandene Cache
      (abgeschnittene Antwort) - sonst gilt der Abruf als fehlgeschlagen und der Cache bleibt unangetastet.
-  3. Bei Erfolg wird die CSV in yf_data/FRED_<ID>.csv zwischengespeichert und eine [ok]-Zeile ausgegeben
+  3. Bei Erfolg wird die CSV in daten/FRED_<ID>.csv zwischengespeichert und eine [ok]-Zeile ausgegeben
      (Zeitraum, Zeilenzahl, Zahl der neuen Zeilen gegenüber dem Cache, ggf. Zahl der Versuche).
   4. Bei Misserfolg wird der Cache genutzt (mit Warnung inklusive letztem Datum und Alter; ist er älter als
      STALE_AFTER_DAYS, kommt ein deutlicher Hinweis, dass die jüngsten Tage fehlen). Ohne gültigen Cache bricht
@@ -41,7 +41,9 @@ from pathlib import Path
 
 import pandas as pd
 
-FRED_CACHE_DIR = Path(__file__).resolve().parent / "yf_data"      # gemeinsam für alle Skripte
+from lib.pfade import data_dir
+
+FRED_CACHE_DIR = data_dir()      # daten/ im Hauptverzeichnis, gemeinsam für alle Skripte (lib/pfade.py)
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
 REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0 (taa-backtest)", "Accept": "text/csv,*/*"}
 ATTEMPTS = 3                       # Versuche je Reihe

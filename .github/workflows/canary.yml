@@ -29,7 +29,7 @@ jobs:
         run: python canary.py | tee canary_output.txt
 
       - name: Push senden
-        run: python ntfy_push.py canary_output.txt
+        run: python lib/ntfy_push.py canary_output.txt
 
       - name: Fehler melden
         if: failure()

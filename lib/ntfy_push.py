@@ -2,7 +2,7 @@
 Schickt das Ergebnis eines canary.py-Laufs als kurze Push-Nachricht über ntfy.
 
 Aufruf (siehe .github/workflows/canary.yml):
-    python ntfy_push.py canary_output.txt
+    python lib/ntfy_push.py canary_output.txt
 
 Das Thema (Topic) kommt aus der Umgebungsvariable NTFY_TOPIC (in GitHub
 als Secret hinterlegt). Optional: NTFY_SERVER (Standard https://ntfy.sh).

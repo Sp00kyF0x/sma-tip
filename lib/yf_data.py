@@ -183,7 +183,7 @@ heitliche Kursreihen bei nur EINEM Abruf pro Aufruf von get_price_history():
 
 Sicherer Auswertungszeitpunkt (SAFE_EVALUATION_TIME_NY):
   Maßgeblich ist die New Yorker Zeit (NYSE/Nasdaq-Handelsschluss 16:00
-  Uhr Ortszeit): Vor 16:04 Uhr New Yorker Zeit wird als Abfrage-Ende nur
+  Uhr Ortszeit): Vor 16:05 Uhr New Yorker Zeit wird als Abfrage-Ende nur
   der letzte VOLLSTÄNDIGE Handelstag verwendet (statt eines unfertigen
   Intraday-Standes, siehe compute_query_end_date()). Die Funktion
   akzeptiert eine beliebige zeitzonenbehaftete aktuelle Zeit (z.B.
@@ -213,8 +213,8 @@ Verwendung in einem Skript:
     # Gültige Kalendernamen: pandas_market_calendars.get_calendar_names().
 
 Persistente Ticker-Historie:
-    Liegt unter KNOWN_VALUES_DIR (Unterordner "yf_data" neben dieser
-    Datei), eine Textdatei pro Ticker ("ISO-Datum,Adj-Close-Wert" pro
+    Liegt unter KNOWN_VALUES_DIR (Ordner "daten" im Hauptverzeichnis,
+    siehe lib/pfade.py), eine Textdatei pro Ticker ("ISO-Datum,Adj-Close-Wert" pro
     Zeile, sortiert). Diese Dateien sollten NICHT von Hand bearbeitet
     werden - Einträge daraus zu entfernen hebt den Regressions-/
     Auffüll-Schutz für genau diese Handelstage auf. Zeilen ohne Komma
@@ -228,6 +228,8 @@ from __future__ import annotations
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from lib.pfade import data_dir
 
 try:
     import numpy as np
@@ -243,10 +245,10 @@ except ImportError as exc:
 # Konfiguration (für alle drei Skripte identisch)
 # ----------------------------------------------------------------------
 # Frühester Zeitpunkt (New Yorker Ortszeit), ab dem der Schlusskurs des
-# heutigen Handelstags als final gilt: 4 Minuten nach dem US-Handelsschluss
-# um 16:00 Uhr. In deutscher Zeit entspricht das meist 22:04 Uhr, in den
-# Wochen mit abweichender Sommerzeit-Umstellung 21:04 Uhr.
-SAFE_EVALUATION_TIME_NY = dt_time(16, 4)
+# heutigen Handelstags als final gilt: 5 Minuten nach dem US-Handelsschluss
+# um 16:00 Uhr. In deutscher Zeit entspricht das meist 22:05 Uhr, in den
+# Wochen mit abweichender Sommerzeit-Umstellung 21:05 Uhr.
+SAFE_EVALUATION_TIME_NY = dt_time(16, 5)
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 
@@ -255,7 +257,7 @@ BERLIN_TZ = ZoneInfo("Europe/Berlin")
 # Modul-Docstring Punkt 1 und _load_known_values()/_save_known_values()).
 # Liegt neben dieser Datei, unabhängig vom Arbeitsverzeichnis, aus dem
 # ein Skript gestartet wird.
-KNOWN_VALUES_DIR = Path(__file__).resolve().parent / "yf_data"
+KNOWN_VALUES_DIR = data_dir()          # daten/ im Hauptverzeichnis (siehe lib/pfade.py)
 
 # Extremer Kurssprung: Verhältnis von Adj Close an zwei aufeinander-
 # folgenden, tatsächlich vorhandenen Datenpunkten desselben Downloads,

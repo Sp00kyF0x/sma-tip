@@ -5,7 +5,7 @@ Backtest: Hybrid-Strategie (TIP-Canary + Nasdaq-100-SMA200), rein synthetisch
 Das Script rechnet DURCHGEHEND mit einem synthetischen S&P-500-Asset (SPY in
 EUR umgerechnet, ggf. gehebelt) - ohne reale ETF-Kurse und ohne Verkettung.
 Grund: Europäische ETFs werden um 17:30 (Xetra) bewertet, das Signal entsteht
-aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (kalibrierung_hebel.py, gegen reale ETFs)
+aber zum US-Schluss (~22:00 MEZ); die Kalibrierung (analyse/kalibrierung_hebel.py, gegen reale ETFs)
 zeigt, dass am Xetra-Schluss nur ca. 60 % der US-Tagesbewegung eingepreist
 sind. Backtests mit realen ETFs sind deshalb optimistisch; der synthetische
 Kurs am US-Schluss entspricht einer Abend-Ausführung.
@@ -20,6 +20,8 @@ Strategien (je Risk-Asset-Variante, alle nach Steuern):
                        Score = 0 als "nicht über", also defensiv).
   TIP-Canary           nur das TIP-Signal (Vergleich).
   NDX-SMA200           nur das Nasdaq-100-SMA-Signal (Vergleich).
+  Das SMA-Signal hat ein Band (Hysterese) um die SMA, siehe strategie.toml
+  und lib/band.py (Standard: raus bei Kurs <= SMA x 1,007, rein > SMA x 1,02).
   Buy & Hold           Referenz.
   In defensiven Phasen wird Tagesgeld gehalten (siehe unten), kein
   Defensiv-ETF. Wechsel = Wechsel zwischen Risk-Asset und Tagesgeld (jede
@@ -38,7 +40,7 @@ Kostenmodell des synthetischen Assets (zeitvariabel, siehe build_synthetic_eur()
   Tagesrendite = Brutto-Rendite - (fixe Kosten + (Hebel-1) * Zins(t)) / 252
   - fixe Kosten aus der Kalibrierung: 1x 0,25 % p.a. (SXR8-Niveau), 2x 1,20 % p.a.
     (18MF.DE, Hebel in EUR, Zins ECBDFR) bzw. 1,58 % p.a. (DBPG.DE, Hebel in USD,
-    Zins DFF). Zinsreihen kommen von FRED über fred_data.py (Cache in yf_data/FRED_<ID>.csv).
+    Zins DFF). Zinsreihen kommen von FRED über lib/fred_data.py (Cache in daten/FRED_<ID>.csv).
   - LEVER_CURRENCY = "EUR": der Hebel wirkt auch auf den Wechselkurs (wie 18MF.DE,
     Hauptfall); "USD": Hebel nur auf den Aktienindex, Wechselkurs 1x (wie DBPG.DE).
   - Vor 2011 gibt es keine Kalibrierung; dieselben Parameter gelten als Annahme.
@@ -126,8 +128,11 @@ Korrektur bekannter, bestätigter Kurssprünge - siehe dortiger Docstring.
 
 Ergebnisse (Vergleichstabelle, Zusatzkennzahlen, Jahresübersicht) werden sowohl
 auf der Konsole ausgegeben als auch gesammelt in eine einzelne Textdatei
-geschrieben (siehe OUTPUT_DIR/main()), zusätzlich zu den beiden Plots
-(Strategievergleich, Drawdown-Verlauf).
+geschrieben (siehe OUTPUT_DIR/main()), zusätzlich zu je einer Grafik pro
+Hebelstufe (Depotverlauf oben, Drawdown-Verlauf darunter). Dateinamen enthalten
+den Steuermodus (APPLY_CAPITAL_GAINS_TAX / APPLY_VORABPAUSCHALE, siehe tax_mode()):
+backtest_ergebnis_mitSteuern.txt, 01_vergleich_2x_mitSteuern.png,
+02_vergleich_1x_mitSteuern.png bzw. ..._ohneSteuern.
 
 Abhängigkeiten:
     pip install -r requirements.txt
@@ -148,8 +153,11 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
-from fred_data import FRED_CACHE_DIR, FredUnavailableError, load_fred_rate   # noqa: F401
-from yf_data import (
+from lib import parameter as P
+from lib.band import band_raw_risk
+from lib.fred_data import FRED_CACHE_DIR, FredUnavailableError, load_fred_rate   # noqa: F401
+from lib.pfade import results_dir
+from lib.yf_data import (
     BERLIN_TZ,
     compute_query_end_date,
     load_prices,
@@ -159,8 +167,12 @@ from yf_data import (
 # ----------------------------------------------------------------------
 # Konfiguration
 # ----------------------------------------------------------------------
+# Die STRATEGIE-Parameter (Canary- und Trend-Ticker, Lookbacks, Whipsaw-Filter, SMA-Länge, Band) stehen
+# zentral in strategie.toml (Hauptverzeichnis) und gelten gleichermaßen für canary.py - siehe unten.
+# Hier stehen nur die Einstellungen, die allein den Backtest betreffen (Risk-Varianten, Kosten, Steuern).
+
 # Canary-Asset: liefert nur das Signal (13612U-Momentum), wird nicht gehalten.
-CANARY_TICKER = "TIP"   # iShares TIPS Bond ETF
+CANARY_TICKER = P.CANARY_TICKER
 
 # EINE oder MEHRERE Risk-Asset-Varianten (siehe Modul-Docstring "Getestete
 # Varianten") - NUR die ERSTE Variante (Dictionary-Reihenfolge) bekommt die
@@ -221,30 +233,36 @@ FX_TICKER = "EUR=X"
 # ist der aussagekräftige Teil.
 SHOW_RISK_PHASES = False
 
-OUTPUT_DIR = Path("backtest")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Startkapital für die Grafik der Wertentwicklung (nur Darstellung, die Textauswertung rechnet in Prozent).
+# Die y-Achse bleibt logarithmisch, beschriftet in Zehnerpotenzen des Betrags (10.000 €, 100.000 € ...).
+# Im Drawdown-Teil der Grafik erscheinen nur diese Strategien (Schlüssel aus STRATEGY_NAMES bzw. "bh").
+PLOT_DRAWDOWN_STRATEGIES = ("hybrid", "tip")
+START_CAPITAL_EUR = 10000.0
 
-# Lookbacks in HANDELSTAGEN für den 13612U-Score des Canary-Assets
-# (TIP): 1M/3M/6M/12M = 21/63/126/252 Handelstage, gezählt in TIPs
-# eigener Kurshistorie.
-LOOKBACK_DAYS_CANARY = (21, 63, 126, 252)
+OUTPUT_DIR = results_dir("backtest")       # ergebnisse/backtest/ im Hauptverzeichnis
 
-# Whipsaw-/Bestätigungsfenster (in Handelstagen) des TIP-Canary-
-# Signals, GETRENNT je Wechselrichtung (siehe Modul-Docstring
-# "Rebalancing / Whipsaw-Filter").
-CONFIRMATION_A = 1  # Risk -> Defensiv
-CONFIRMATION_B = 2  # Defensiv -> Risk
-
-# Nasdaq-100-SMA-Signal, eigener Whipsaw-Filter (getrennt vom TIP). Signalquelle:
-# Preisindex ^NDX (USD, nur Signal - es wird nicht gehandelt, daher keine
-# Währungsumrechnung).
-TREND_TICKER = "^NDX"
-TREND_SMA_DAYS = 200
-TREND_CONFIRMATION_A = 1  # SMA-Signal: Risk -> Defensiv (Kurs unter SMA)
-TREND_CONFIRMATION_B = 2  # SMA-Signal: Defensiv -> Risk (Kurs über SMA)
+# --- aus strategie.toml (zentral, gilt auch für canary.py) ---
+# Lookbacks in HANDELSTAGEN für den 13612U-Score des Canary-Assets (TIP), gezählt in TIPs eigener Kurshistorie.
+LOOKBACK_DAYS_CANARY = P.LOOKBACK_DAYS
+# Whipsaw-/Bestätigungsfenster (Handelstage) des TIP-Signals, getrennt je Wechselrichtung.
+CONFIRMATION_A = P.CONFIRMATION_A  # Risk -> Defensiv
+CONFIRMATION_B = P.CONFIRMATION_B  # Defensiv -> Risk
+# Nasdaq-100-SMA-Signal mit eigenem Whipsaw-Filter. Signalquelle ist der Preisindex (USD, nur Signal,
+# es wird nicht gehandelt, daher keine Währungsumrechnung).
+TREND_TICKER = P.TREND_TICKER
+TREND_SMA_DAYS = P.TREND_SMA_DAYS
+TREND_CONFIRMATION_A = P.TREND_CONFIRMATION_A  # SMA-Signal: Risk -> Defensiv
+TREND_CONFIRMATION_B = P.TREND_CONFIRMATION_B  # SMA-Signal: Defensiv -> Risk
+# Band um die SMA in Prozent der SMA (wirkt VOR dem Bestätigungsfilter a/b, siehe lib/band.py):
+#   Ausstieg: Risk -> Defensiv, sobald Kurs <= SMA * (1 - TREND_BAND_EXIT_PCT / 100)
+#   Einstieg: Defensiv -> Risk, sobald Kurs >  SMA * (1 + TREND_BAND_ENTRY_PCT / 100)
+# Analyse-Skripte (analyse/plateau_band.py) setzen diese beiden Werte zum Testen direkt um; im normalen
+# Lauf gelten die Werte aus strategie.toml.
+TREND_BAND_EXIT_PCT = P.TREND_BAND_EXIT_PCT
+TREND_BAND_ENTRY_PCT = P.TREND_BAND_ENTRY_PCT
 
 # Anzeigenamen der Strategien (Reihenfolge = Ausgabe-Reihenfolge)
-STRATEGY_NAMES = {"hybrid": "TIPxSMA", "tip": "TIP", "sma": "SMA"}
+STRATEGY_NAMES = {"hybrid": "SMA-TIP", "tip": "TIP", "sma": "SMA"}
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -300,6 +318,19 @@ def spread_for_ticker(ticker: str) -> float:
 # https://de.wikipedia.org/wiki/Vorabpauschale).
 BASISZINS = 0.025
 APPLY_VORABPAUSCHALE = True
+
+
+def tax_mode() -> tuple[str, str]:
+    """(Text, Kennung) des Steuermodus für Überschriften und Dateinamen, je nach
+    APPLY_CAPITAL_GAINS_TAX / APPLY_VORABPAUSCHALE: ("nach Steuern", "mitSteuern"),
+    ("vor Steuern", "ohneSteuern") oder eine der gemischten Varianten."""
+    if APPLY_CAPITAL_GAINS_TAX and APPLY_VORABPAUSCHALE:
+        return "nach Steuern", "mitSteuern"
+    if not APPLY_CAPITAL_GAINS_TAX and not APPLY_VORABPAUSCHALE:
+        return "vor Steuern", "ohneSteuern"
+    if APPLY_CAPITAL_GAINS_TAX:
+        return "nach Kapitalertragsteuer, ohne Vorabpauschale", "nurKESt"
+    return "nur mit Vorabpauschale, ohne Kapitalertragsteuer", "nurVP"
 
 
 # ----------------------------------------------------------------------
@@ -735,16 +766,28 @@ def apply_taxes(daily_position: pd.Series,
 # ----------------------------------------------------------------------
 # Backtest der TIP-Canary-Strategie (ein einzelnes, festes Risk-Asset)
 # ----------------------------------------------------------------------
-def trend_signal_position(trend_adj: pd.Series, sma_days: int, a: int, b: int) -> pd.Series:
+def trend_signal_position(trend_adj: pd.Series, sma_days: int, a: int, b: int,
+                          band_exit_pct: float | None = None,
+                          band_entry_pct: float | None = None) -> pd.Series:
     """SMA-Signal auf dem EIGENEN Kalender der Signalquelle (^NDX): Schlusskurs
     STRIKT ÜBER dem `sma_days`-Tage-SMA (inkl. des aktuellen Schlusskurses) ->
     "RISK", sonst "DEFENSIVE" (Gleichstand wie TIP-Score = 0: defensiv), danach
     der asymmetrische Whipsaw-Filter `a`/`b` (siehe apply_confirmation_filter();
-    a: weg von Risk, b: hin zu Risk). Tage ohne SMA-Wert entfallen."""
+    a: weg von Risk, b: hin zu Risk). Tage ohne SMA-Wert entfallen.
+    Optional ein Hysterese-Band (band_exit_pct / band_entry_pct, Standard: die
+    Einstellungen TREND_BAND_EXIT_PCT / TREND_BAND_ENTRY_PCT); 0 / 0 = kein Band."""
+    exit_pct = TREND_BAND_EXIT_PCT if band_exit_pct is None else band_exit_pct
+    entry_pct = TREND_BAND_ENTRY_PCT if band_entry_pct is None else band_entry_pct
     sma = trend_adj.rolling(sma_days).mean()
     valid = sma.notna()
-    raw = pd.Series(np.where(trend_adj > sma, "RISK", "DEFENSIVE"),
-                    index=trend_adj.index, dtype=object)[valid]
+    if exit_pct == 0 and entry_pct == 0:
+        raw = pd.Series(np.where(trend_adj > sma, "RISK", "DEFENSIVE"),
+                        index=trend_adj.index, dtype=object)[valid]
+    else:
+        v = valid.to_numpy()
+        risk = band_raw_risk(trend_adj.to_numpy(dtype=float)[v], sma.to_numpy(dtype=float)[v],
+                             exit_pct, entry_pct)
+        raw = pd.Series(np.where(risk, "RISK", "DEFENSIVE"), index=trend_adj.index[v], dtype=object)
     return apply_confirmation_filter(raw, a, b)
 
 
@@ -1100,6 +1143,8 @@ def format_yearly_comparison_table(canary_equity: pd.Series, bh_equity: pd.Serie
                       f"{_fmt_pct(cagr_tip):>14}{_fmt_pct(cagr_bh):>14}"
                       f"{_fmt_pct(cagr_tip - cagr_bh):>16}")
     lines.append("")
+    if not (APPLY_CAPITAL_GAINS_TAX or APPLY_VORABPAUSCHALE):
+        return "\n".join(lines)
     lines.append(
         "  Die Jahreswerte sind isoliert gerechnet: Steuerbasis jeweils der 1.1. (Kapitalertragsteuer nur\n"
         "  auf Gewinne seit Jahresbeginn, Vorabpauschale des Jahres enthalten). Sie ergeben deshalb nicht\n"
@@ -1518,7 +1563,7 @@ def regime_phases(daily_position: pd.Series) -> tuple[list[tuple[pd.Timestamp, p
     """Zerlegt die TATSÄCHLICH gehaltene Position (daily_position, siehe
     backtest_tip_canary()) in zusammenhängende Risk- bzw. Defensiv-Phasen (siehe
     identify_position_episodes()), zur flächigen Hintergrund-Markierung
-    in plot_strategy_comparison()/plot_drawdowns(). "RISK" ist dabei das
+    in plot_strategy_comparison(). "RISK" ist dabei das
     eine Regime, JEDER andere Wert (DEFENSIVE oder CASH) zusammen das "Defensiv"-Regime - fürs Plotten interessiert nur
     der makro-seitige Risk/Defensiv-Zustand, nicht WELCHES konkrete
     defensive Asset/Cash gehalten wird (das zeigen die Detail-Tabellen
@@ -1542,7 +1587,8 @@ REGIME_PHASE_COLOR_DEFENSIVE = "#fbe6e6"  # sehr helles Rot
 
 
 def _shade_regime_phases(ax, risk_phases: list[tuple[pd.Timestamp, pd.Timestamp]],
-                          defensive_phases: list[tuple[pd.Timestamp, pd.Timestamp]]) -> None:
+                          defensive_phases: list[tuple[pd.Timestamp, pd.Timestamp]],
+                          with_labels: bool = True) -> None:
     """Färbt den Plot-Hintergrund durchgehend über die gesamte Dauer
     jeder Phase ein (siehe regime_phases()) - HELLGRÜN für Risk-Phasen,
     HELLROT für Defensiv-Phasen. Jede Farbe bekommt genau EINEN
@@ -1550,44 +1596,53 @@ def _shade_regime_phases(ax, risk_phases: list[tuple[pd.Timestamp, pd.Timestamp]
     sonst würde die Legende bei vielen Regime-Wechseln unlesbar."""
     for i, (start, end) in enumerate(risk_phases):
         ax.axvspan(start, end, color=REGIME_PHASE_COLOR_RISK, zorder=0,
-                   label="Risk-Phase" if i == 0 else None)
+                   label="Risk-Phase" if i == 0 and with_labels else None)
     for i, (start, end) in enumerate(defensive_phases):
         ax.axvspan(start, end, color=REGIME_PHASE_COLOR_DEFENSIVE, zorder=0,
-                   label="Defensiv-Phase" if i == 0 else None)
+                   label="Defensiv-Phase" if i == 0 and with_labels else None)
 
 
 def plot_strategy_comparison(curves: dict[str, pd.Series], title: str, filename: str,
                               risk_phases: list[tuple[pd.Timestamp, pd.Timestamp]] = (),
                               defensive_phases: list[tuple[pd.Timestamp, pd.Timestamp]] = ()) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6))
+    """Eine Grafik mit zwei Teilen und gemeinsamer Zeitachse: oben der Depotverlauf aller Kurven
+    (logarithmisch, in Euro ab START_CAPITAL_EUR), darunter der Drawdown der Strategien
+    aus PLOT_DRAWDOWN_STRATEGIES (gleiche Farben wie oben, daher ohne eigene Legende)."""
+    from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter, PercentFormatter
+    fig, (ax, ax_dd) = plt.subplots(2, 1, figsize=(11, 8), sharex=True, layout="constrained",
+                                    gridspec_kw={"height_ratios": [3, 1]})
+    fig.get_layout_engine().set(h_pad=0.02, hspace=0.0)
     _shade_regime_phases(ax, risk_phases, defensive_phases)
+    _shade_regime_phases(ax_dd, risk_phases, defensive_phases, with_labels=False)
+
+    colors = {}
     for label, series in curves.items():
-        ax.plot(series.index, series.values, label=label, linewidth=1.3)
+        (line,) = ax.plot(series.index, series.values * START_CAPITAL_EUR, label=label, linewidth=1.3)
+        colors[label] = line.get_color()
     ax.set_yscale("log")
-    ax.set_title(title)
-    ax.set_ylabel("Wertentwicklung (Start = 1, log)")
-    ax.set_xlabel("Datum")
+    # Hauptstriche nur bei Zehnerpotenzen (10.000 €, 100.000 €, ...), beschriftet als Geldbetrag mit
+    # deutschem Tausenderpunkt; Zwischenstriche ohne Beschriftung, nur als Gitter. Die Achse folgt den
+    # Daten: Stufen unter dem Startwert erscheinen nur, wenn eine Kurve tatsächlich so tief fällt.
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0,)))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{v:,.0f} €".replace(",", ".")))
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=tuple(range(2, 10))))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    start_txt = f"{START_CAPITAL_EUR:,.0f} €".replace(",", ".")
+    ax.set_title(f"{title}, Start {start_txt}")
     ax.legend(loc="upper left", fontsize=8, ncol=2)
     ax.grid(True, which="both", linestyle="--", alpha=0.4)
-    fig.tight_layout()
-    fig.savefig(OUTPUT_DIR / filename, dpi=150)
-    plt.close(fig)
 
-
-def plot_drawdowns(curves: dict[str, pd.Series], filename: str,
-                    risk_phases: list[tuple[pd.Timestamp, pd.Timestamp]] = (),
-                    defensive_phases: list[tuple[pd.Timestamp, pd.Timestamp]] = ()) -> None:
-    fig, ax = plt.subplots(figsize=(11, 4))
-    _shade_regime_phases(ax, risk_phases, defensive_phases)
-    for label, series in curves.items():
+    # Drawdown nur für die gewählten Strategien (sonst zu unübersichtlich); Labels wie "2x SMA-TIP"
+    names = {STRATEGY_NAMES.get(k, "B&H" if k == "bh" else k) for k in PLOT_DRAWDOWN_STRATEGIES}
+    for label in (lbl for lbl in curves if lbl.split(" ", 1)[-1] in names):   # Reihenfolge wie oben
+        series = curves[label]
         dd = series / series.cummax() - 1.0
-        ax.plot(dd.index, dd.values * 100, label=label, linewidth=1.1)
-    ax.set_title("Drawdown-Verlauf")
-    ax.set_ylabel("Drawdown in %")
-    ax.set_xlabel("Datum")
-    ax.legend(loc="lower left", fontsize=8, ncol=2)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    fig.tight_layout()
+        ax_dd.plot(dd.index, dd.values * 100, label=label, color=colors[label], linewidth=1.1)
+    ax_dd.yaxis.set_major_formatter(PercentFormatter(decimals=0))
+    ax_dd.set_ylabel("Drawdown")
+    ax_dd.grid(True, linestyle="--", alpha=0.4)
+    ax.margins(x=0.01)
+
     fig.savefig(OUTPUT_DIR / filename, dpi=150)
     plt.close(fig)
 
@@ -1660,6 +1715,13 @@ def main() -> None:
     # Zusatz-Tabellen (siehe Modul-Docstring "Getestete Varianten").
     primary_ticker = next(iter(RISK_TICKERS))
 
+    if (TREND_BAND_EXIT_PCT, TREND_BAND_ENTRY_PCT) != (P.TREND_BAND_EXIT_PCT, P.TREND_BAND_ENTRY_PCT):
+        print(f"[info]     SMA-Band abweichend von strategie.toml: Ausstieg {TREND_BAND_EXIT_PCT:+g} %, "
+              f"Einstieg {TREND_BAND_ENTRY_PCT:+g} % (canary.py nutzt die Werte aus strategie.toml).")
+    if TREND_BAND_EXIT_PCT or TREND_BAND_ENTRY_PCT:
+        if TREND_BAND_EXIT_PCT + TREND_BAND_ENTRY_PCT < 0:
+            print("[warn]     TREND_BAND_EXIT_PCT + TREND_BAND_ENTRY_PCT < 0: Schwellen liegen überkreuzt, "
+                  "das Rohsignal kippt dazwischen täglich - Ergebnis nicht sinnvoll interpretierbar.")
     data = load_market_data()
     canary_adj, trend_adj = data["canary_adj"], data["trend_adj"]
     risky_adj_by_ticker = data["risky_adj_by_ticker"]
@@ -1717,12 +1779,16 @@ def main() -> None:
         curves[bh_label] = bh_equity
         stats_labels_by_variant[variant].append(bh_label)
 
+    tax_txt, tax_tag = tax_mode()
+
     # --- Textauswertung: wird gleichzeitig ausgegeben und gesammelt,
     #     um sie am Ende in EINE Textdatei zu schreiben ---
     report_lines: list[str] = [
         "=" * 70,
-        "Backtest-Auswertung (SYNTHETISCH): TIPxSMA (TIP-Canary + Nasdaq-100-SMA), S&P 500 aus SPY in EUR",
+        "Backtest-Auswertung (SYNTHETISCH): SMA-TIP (TIP-Canary + Nasdaq-100-SMA), S&P 500 aus SPY in EUR",
         f"Erstellt: {datetime.now(BERLIN_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Berlin)",
+        f"Steuern: {tax_txt} (Kapitalertragsteuer {'an' if APPLY_CAPITAL_GAINS_TAX else 'aus'}, "
+        f"Vorabpauschale {'an' if APPLY_VORABPAUSCHALE else 'aus'})",
         "=" * 70,
     ]
 
@@ -1743,12 +1809,16 @@ def main() -> None:
     risk_assets_str = "\n  ".join(_variant_label(v, info) for v, info in RISK_TICKERS.items())
     bh_info_lines = [f"  {v}: rein synthetisch ({cost_text_by_variant[v]})." for v in RISK_TICKERS]
     cash_text = (f"\nCash-Phasen: Tagesgeld zu max({TAGESGELD_RATE} - {TAGESGELD_ABSCHLAG * 100:.2f}%, 0), "
-                 f"täglich nach {ABGELTUNGSTEUER_BASISSATZ:.3%} Steuer gutgeschrieben."
+                 + (f"täglich nach {ABGELTUNGSTEUER_BASISSATZ:.3%} Steuer gutgeschrieben."
+                    if APPLY_CAPITAL_GAINS_TAX else "täglich brutto (ohne Steuer) gutgeschrieben.")
                  if TAGESGELD_RATE else "")
     emit(f"\nRisk-Asset-Varianten (rein synthetisch, Kosten zeitvariabel):\n  {risk_assets_str}"
          f"{cash_text}"
-         f"\nTIPxSMA: Risk, wenn TIP (a={CONFIRMATION_A}/b={CONFIRMATION_B}) ODER {TREND_TICKER} über "
-         f"seiner SMA{TREND_SMA_DAYS} (Filter a={TREND_CONFIRMATION_A}/b={TREND_CONFIRMATION_B}) "
+         f"\nSMA-TIP: Risk, wenn TIP (a={CONFIRMATION_A}/b={CONFIRMATION_B}) ODER {TREND_TICKER} über "
+         f"seiner SMA{TREND_SMA_DAYS} (Filter a={TREND_CONFIRMATION_A}/b={TREND_CONFIRMATION_B}"
+         + (f", Band Ausstieg {TREND_BAND_EXIT_PCT:+g} % / Einstieg {TREND_BAND_ENTRY_PCT:+g} %"
+            if (TREND_BAND_EXIT_PCT or TREND_BAND_ENTRY_PCT) else "")
+         + ") "
          f"Risk meldet; Defensiv nur, wenn beide schlecht stehen."
          f"\nBuy & Hold-Referenz:\n" + "\n".join(bh_info_lines))
 
@@ -1757,8 +1827,8 @@ def main() -> None:
     for variant, info in RISK_TICKERS.items():
         variant_stats = {lbl: strategy_stats_by_label[lbl] for lbl in stats_labels_by_variant[variant]}
         ordered = sorted(variant_stats, key=lambda lbl: variant_stats[lbl]["Rendite"], reverse=True)
-        emit(f"\n{info['leverage']:g}x: TIPxSMA, TIP und SMA (NDX-SMA200) vs. B&H "
-             f"(jeweils nach Steuern, sortiert nach Rendite; "
+        emit(f"\n{info['leverage']:g}x: SMA-TIP, TIP und SMA (NDX-SMA200) vs. B&H "
+             f"(jeweils {tax_txt}, sortiert nach Rendite; "
              f"Wechsel = Risk-Asset <-> Defensiv/Cash):")
         emit(format_stats_table({lbl: variant_stats[lbl] for lbl in ordered}), tight=True)
 
@@ -1793,27 +1863,26 @@ def main() -> None:
         emit(format_risk_phase_detail_table(primary_risky_adj, primary_daily_position,
                                              name=primary_ticker))
 
-    results_path = OUTPUT_DIR / "backtest_ergebnis.txt"
+    results_path = OUTPUT_DIR / f"backtest_ergebnis_{tax_tag}.txt"
     results_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 
     # --- Plots (Regime-Phasen-Hintergrund: hellgrün = Risk-Phase,
     #     hellrot = Defensiv-Phase - aus der gehaltenen Position der
     #     PRIMÄREN Variante, siehe regime_phases()) ---
     risk_phases, defensive_phases = regime_phases(primary_daily_position)
-    # Grafik nur für die gehebelten Varianten (die 1x-Varianten stehen in der
-    # Textauswertung); gibt es keine, werden alle gezeichnet.
-    plot_variants = [v for v, info in RISK_TICKERS.items() if info["leverage"] != 1.0] or list(RISK_TICKERS)
-    plot_curves = {lbl: curves[lbl] for v in plot_variants for lbl in stats_labels_by_variant[v]}
-    plot_leverage = ", ".join(dict.fromkeys(f"{RISK_TICKERS[v]['leverage']:g}x" for v in plot_variants))
-    plot_strategy_comparison(
-        plot_curves,
-        title=f"TIPxSMA / TIP / SMA vs. B&H ({plot_leverage}) - jeweils nach Steuern",
-        filename="01_strategie_vergleich.png",
-        risk_phases=risk_phases,
-        defensive_phases=defensive_phases,
-    )
-    plot_drawdowns(plot_curves, filename="02_drawdowns.png",
-                    risk_phases=risk_phases, defensive_phases=defensive_phases)
+    # Je Hebelstufe eine Grafik (2x zuerst), Dateiname mit Hebel und Steuermodus,
+    # z. B. 01_vergleich_2x_mitSteuern.png / 02_vergleich_1x_mitSteuern.png.
+    levels = sorted({info["leverage"] for info in RISK_TICKERS.values()}, reverse=True)
+    for k, lev in enumerate(levels, 1):
+        variants = [v for v, info in RISK_TICKERS.items() if info["leverage"] == lev]
+        plot_curves = {lbl: curves[lbl] for v in variants for lbl in stats_labels_by_variant[v]}
+        plot_strategy_comparison(
+            plot_curves,
+            title=f"SMA-TIP / TIP / SMA vs. B&H ({lev:g}x) - jeweils {tax_txt}",
+            filename=f"{k:02d}_vergleich_{lev:g}x_{tax_tag}.png",
+            risk_phases=risk_phases,
+            defensive_phases=defensive_phases,
+        )
 
     print(f"\nTextauswertung und Plots gespeichert in: {OUTPUT_DIR.resolve()}")
 

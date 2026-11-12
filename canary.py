@@ -29,11 +29,16 @@ Hybrid-Logik (TIP + SMA):
   Zwei Signale, jedes mit eigenem Bestätigungsfilter:
     - TIP-Canary: 13612U-Score(TIP) > 0 -> RISK (Filter a=CONFIRMATION_A,
       b=CONFIRMATION_B)
-    - Trend: Schlusskurs des TREND_TICKER (^NDX) STRIKT über seinem
-      TREND_SMA_DAYS-Tage-SMA (inkl. des aktuellen Schlusskurses) -> RISK,
-      sonst nicht RISK (Filter a=TREND_CONFIRMATION_A, b=TREND_CONFIRMATION_B).
-      Der SMA läuft auf dem eigenen Kalender des Index und wird auf den
-      TIP-Kalender vorwärtsgefüllt.
+    - Trend: Schlusskurs des TREND_TICKER (^NDX) gegen seinen
+      TREND_SMA_DAYS-Tage-SMA (inkl. des aktuellen Schlusskurses) mit Band
+      (Hysterese, lib/band.py): RISK -> nicht RISK, sobald der Kurs höchstens
+      SMA x (1 - band_ausstieg_pct/100) schließt; zurück zu RISK erst, wenn er
+      über SMA x (1 + band_einstieg_pct/100) schließt; dazwischen bleibt der
+      vorherige Zustand. Danach der Filter a=TREND_CONFIRMATION_A,
+      b=TREND_CONFIRMATION_B. Der SMA läuft auf dem eigenen Kalender des Index
+      und wird auf den TIP-Kalender vorwärtsgefüllt.
+  Alle Strategie-Parameter (Ticker, Lookbacks, Filter, SMA-Länge, Band)
+  stehen zentral in strategie.toml und gelten gleich für backtest.py.
   Regime = RISK, sobald MINDESTENS EINES der beiden bestätigten Signale
   RISK meldet (ODER-Verknüpfung). Nur wenn beide nicht RISK melden, gilt
   das Regime DEFENSIVE. Das gehaltene Asset ist dann ausschließlich
@@ -168,7 +173,9 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
-from yf_data import (
+from lib import parameter as P
+from lib.band import band_raw_risk, next_close_thresholds
+from lib.yf_data import (
     BERLIN_TZ,
     NEW_YORK_TZ,
     SAFE_EVALUATION_TIME_NY,
@@ -181,14 +188,15 @@ from yf_data import (
 # ----------------------------------------------------------------------
 # Ticker -> Anzeigename. Der Ticker (Dictionary-Key) wird für die
 # yf-Abfrage verwendet, der Anzeigename ausschließlich für die Ausgabe.
+# Canary- und Trend-Ticker kommen aus strategie.toml (zentral, gilt auch für backtest.py).
 CANARY = {
-    "TIP": "TIP",                # iShares TIPS Bond ETF als Canary-Asset
+    P.CANARY_TICKER: P.CANARY_NAME,   # Canary-Asset (TIP)
 }
 CANARY_TICKER = next(iter(CANARY))
 
 # Trend-Index für das SMA-Signal der Hybrid-Logik.
 TREND = {
-    "^NDX": "Nasdaq 100",        # Trend-Signalquelle (Kurs gegen SMA)
+    P.TREND_TICKER: P.TREND_NAME,     # Trend-Signalquelle (Kurs gegen SMA)
 }
 TREND_TICKER = next(iter(TREND))
 
@@ -210,18 +218,21 @@ ALL_TICKER_NAMES: dict[str, str] = {CANARY_TICKER: CANARY[CANARY_TICKER],
 
 # Lookbacks (Handelstage) für den 13612U-Score von TIP und den Risk-
 # Kandidaten. 136U/13U/1U nutzen die ersten drei/zwei/eine Komponente.
-LOOKBACK_DAYS = (21, 63, 126, 252)
+LOOKBACK_DAYS = P.LOOKBACK_DAYS                 # aus strategie.toml
 
 # Whipsaw-/Bestätigungsfenster (Handelstage) des TIP-Canary-Makrosignals,
 # getrennt je Wechselrichtung (siehe Modul-Docstring).
-CONFIRMATION_A = 1  # weg von RISK (-> DEFENSIVE)
-CONFIRMATION_B = 2  # hin zu RISK
+CONFIRMATION_A = P.CONFIRMATION_A  # weg von RISK (-> DEFENSIVE), aus strategie.toml
+CONFIRMATION_B = P.CONFIRMATION_B  # hin zu RISK
 
 # Trend-Signal (SMA) der Hybrid-Logik: SMA-Länge in Handelstagen und
 # eigene Bestätigungsfenster (gleiche Bedeutung wie oben).
-TREND_SMA_DAYS = 200
-TREND_CONFIRMATION_A = 1  # weg von RISK
-TREND_CONFIRMATION_B = 2  # hin zu RISK
+TREND_SMA_DAYS = P.TREND_SMA_DAYS              # aus strategie.toml
+TREND_CONFIRMATION_A = P.TREND_CONFIRMATION_A  # weg von RISK
+TREND_CONFIRMATION_B = P.TREND_CONFIRMATION_B  # hin zu RISK
+# Band um die SMA (Prozent der SMA), siehe strategie.toml und lib/band.py.
+TREND_BAND_EXIT_PCT = P.TREND_BAND_EXIT_PCT
+TREND_BAND_ENTRY_PCT = P.TREND_BAND_ENTRY_PCT
 
 # Anzahl der zuletzt angezeigten Tage in der Signal-Historie.
 DISPLAY_LAST_N_DAYS = 10
@@ -352,13 +363,17 @@ def apply_confirmation_filter(raw_position: pd.Series, a: int, b: int) -> tuple[
 # ----------------------------------------------------------------------
 def trend_raw_position(trend_prices: pd.Series, sma_days: int) -> tuple[pd.Series, pd.Series]:
     """Tägliches Rohsignal des Trend-Index (ohne Bestätigungsfilter) auf
-    dessen EIGENEM Kalender: Schlusskurs STRIKT über dem `sma_days`-Tage-
-    SMA (inkl. des aktuellen Schlusskurses) -> "RISK", sonst "DEFENSIVE"
-    (Gleichstand: nicht RISK, wie beim TIP-Score = 0). Tage ohne SMA-Wert
-    entfallen. Rückgabe: (Rohsignal, SMA-Serie auf dem vollen Kalender)."""
+    dessen EIGENEM Kalender, mit Band um den `sma_days`-Tage-SMA (inkl. des
+    aktuellen Schlusskurses), siehe lib/band.py: RISK bleibt bis Kurs <= SMA x
+    (1 - TREND_BAND_EXIT_PCT/100), DEFENSIVE bis Kurs > SMA x (1 +
+    TREND_BAND_ENTRY_PCT/100). Ohne Band (0/0): Kurs STRIKT über SMA -> RISK.
+    Dieselbe Funktion nutzt backtest.py. Tage ohne SMA-Wert entfallen.
+    Rückgabe: (Rohsignal, SMA-Serie auf dem vollen Kalender)."""
     sma = trend_prices.rolling(sma_days).mean()
-    raw = pd.Series(np.where(trend_prices > sma, RISK, DEFENSIVE),
-                    index=trend_prices.index, dtype=object)[sma.notna()]
+    valid = sma.notna().to_numpy()
+    risk = band_raw_risk(trend_prices.to_numpy(dtype=float)[valid], sma.to_numpy(dtype=float)[valid],
+                         TREND_BAND_EXIT_PCT, TREND_BAND_ENTRY_PCT)
+    raw = pd.Series(np.where(risk, RISK, DEFENSIVE), index=trend_prices.index[valid], dtype=object)
     return raw, sma
 
 
@@ -727,19 +742,26 @@ def main() -> None:
     gap = trend_gap.loc[today]
     print(signal_line(f"NDX-SMA{TREND_SMA_DAYS}:", trend_state,
                       f"(Kurs {abs(gap):.2%} {'über' if gap > 0 else 'unter'} SMA)", trend_pending))
+    if TREND_BAND_EXIT_PCT or TREND_BAND_ENTRY_PCT:
+        out_lvl, in_lvl = next_close_thresholds(trend["prices"].to_numpy(), TREND_SMA_DAYS,
+                                                TREND_BAND_EXIT_PCT, TREND_BAND_ENTRY_PCT)
+        nxt = (f"Ausstieg bei Schluss <= {out_lvl:,.0f}" if trend_state == RISK
+               else f"Einstieg bei Schluss > {in_lvl:,.0f}").replace(",", ".")
+        print(f"  {'Band:':<14}{P.band_text()}; "
+              f"nächster {TREND[TREND_TICKER]}-Schluss: {nxt} Punkte")
 
     tip_risk, trend_risk = tip_state == RISK, trend_state == RISK
     if tip_risk and trend_risk:
         print("\nBeide Signale melden RISK. Das Regime wechselt erst, wenn beide "
               "nicht mehr RISK melden.")
     elif tip_risk:
-        print(f"\nNur das TIP-Signal trägt RISK (der NDX liegt unter seinem SMA{TREND_SMA_DAYS}). "
+        print(f"\nNur das TIP-Signal trägt RISK (das SMA-Signal ist nicht RISK). "
               f"Kippt das TIP-Signal ({CONFIRMATION_A} Bestätigungstag(e)), wechselt das "
-              f"Regime zu DEFENSIVE, solange der NDX nicht über die SMA zurückkehrt.")
+              f"Regime zu DEFENSIVE, solange das SMA-Signal nicht zu RISK zurückkehrt.")
     elif trend_risk:
-        print(f"\nNur das SMA-Signal trägt RISK (das TIP-Signal ist nicht RISK). Fällt der NDX "
-              f"unter seine SMA{TREND_SMA_DAYS} ({TREND_CONFIRMATION_A} Bestätigungstag(e)), "
-              f"wechselt das Regime zu DEFENSIVE, solange das TIP-Signal nicht RISK meldet.")
+        print(f"\nNur das SMA-Signal trägt RISK (das TIP-Signal ist nicht RISK). Erreicht der NDX "
+              f"die Ausstiegsschwelle seiner SMA{TREND_SMA_DAYS} ({TREND_CONFIRMATION_A} Bestätigungstag(e), "
+              f"siehe Zeile Band), wechselt das Regime zu DEFENSIVE, solange das TIP-Signal nicht RISK meldet.")
     else:
         print(f"\nBeide Signale melden nicht RISK. Zurück zu RISK, sobald eines davon bestätigt "
               f"RISK meldet (TIP {CONFIRMATION_B} Tag(e), SMA {TREND_CONFIRMATION_B} Tag(e)).")

@@ -230,7 +230,7 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
-from yf_data import (
+from lib.yf_data import (
     BERLIN_TZ,
     NEW_YORK_TZ,
     compute_query_end_date,

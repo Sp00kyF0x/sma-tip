@@ -1,0 +1,19 @@
+# Private Depot-Daten (stats.py) - nie ins Repository
+stats/
+
+# Automatisch angelegt: Caches und Ausgaben der Skripte
+daten/
+ergebnisse/
+yf_data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Betriebssystem / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

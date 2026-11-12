@@ -40,14 +40,14 @@ Methode:
     (Tagesbewegung > SPIKE_THRESHOLD, die am Folgetag zurückläuft); gefundene
     Tage werden ausgegeben. Mehrtägige Fehler erkennt das nicht.
 
-Zinsreihen: FRED (öffentlicher CSV-Export, Internet nötig; Abruf über fred_data.py, Cache in yf_data/FRED_<ID>.csv wie in backtest.py, bei Ausfall mit Cache weiterrechnen oder klare Meldung): USD "DFF" (Fed
+Zinsreihen: FRED (öffentlicher CSV-Export, Internet nötig; Abruf über lib/fred_data.py, Cache in daten/FRED_<ID>.csv wie in backtest.py, bei Ausfall mit Cache weiterrechnen oder klare Meldung): USD "DFF" (Fed
 Funds), EUR "ECBDFR" (EZB-Einlagezins; €STR lag nach 2019 etwas darunter,
 EONIA davor etwas darüber - Näherung, einmalig in den Ergebnissen zu
 berücksichtigen). TER-Angaben in PRODUCTS bitte mit den Factsheets abgleichen.
 
-Ausgabe: kalibrierung/kalibrierung_ergebnis.txt und kalibrierung/01_verhaeltnis.png.
+Ausgabe: ergebnisse/kalibrierung/kalibrierung_ergebnis.txt und ergebnisse/kalibrierung/01_verhaeltnis.png.
 
-Aufruf: python kalibrierung_hebel.py
+Aufruf: python analyse/kalibrierung_hebel.py   (aus dem Hauptverzeichnis)
 """
 
 from __future__ import annotations
@@ -64,8 +64,14 @@ except ImportError as exc:
           f"Bitte einmalig ausführen: pip install -r requirements.txt")
     raise SystemExit(1) from None
 
-from fred_data import FredUnavailableError, load_fred_rate
-from yf_data import (
+import sys
+
+# Hauptverzeichnis in den Suchpfad, damit lib/ gefunden wird - egal von wo gestartet.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.fred_data import FredUnavailableError, load_fred_rate   # noqa: E402
+from lib.pfade import results_dir                                  # noqa: E402
+from lib.yf_data import (                                          # noqa: E402
     BERLIN_TZ,
     compute_query_end_date,
     load_prices,
@@ -99,7 +105,7 @@ SPIKE_THRESHOLD = 0.04        # Tagesbewegung des Wechselkurses, ab der ein Ausr
 HAC_LAGS_LEVELS = 26          # Newey-West-Lags (Wochen) für die Niveau-Regression
 HAC_LAGS_RETURNS = 4
 ROLLING_YEARS = 3
-OUTPUT_DIR = Path("kalibrierung")
+OUTPUT_DIR = results_dir("kalibrierung")   # ergebnisse/kalibrierung/
 
 
 # ----------------------------------------------------------------------

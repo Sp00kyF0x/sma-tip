@@ -1,0 +1,34 @@
+# Zentrale Strategie-Parameter
+# =============================
+# Gilt für canary.py (Live-Signal), backtest.py und die Skripte in analyse/.
+# Eine Änderung hier wirkt überall gleichzeitig - Backtest und Live-Signal laufen damit
+# immer mit denselben Regeln. Geprüft und eingelesen von lib/parameter.py.
+#
+# Format TOML: Kommentare beginnen mit #, Dezimalzahlen mit Punkt (2.0, nicht 2,0),
+# Texte in Anführungszeichen.
+
+[tip]
+# Canary-Signal: 13612U-Momentum des TIP (Ø der Renditen über die vier Lookbacks).
+ticker = "TIP"
+name = "TIP"
+lookback_tage = [21, 63, 126, 252]   # Handelstage; gelten auch für das Momentum der Risk-Kandidaten
+# Whipsaw-Filter: so viele Handelstage in Folge muss das Rohsignal stehen, bevor gewechselt wird.
+bestaetigung_aus = 1                  # a: RISK -> DEFENSIVE
+bestaetigung_ein = 2                  # b: DEFENSIVE -> RISK
+
+[sma]
+# Trend-Signal: Schlusskurs des Index gegen seinen gleitenden Durchschnitt (SMA).
+ticker = "^NDX"
+name = "Nasdaq 100"
+tage = 200
+bestaetigung_aus = 1                  # a: RISK -> DEFENSIVE
+bestaetigung_ein = 2                  # b: DEFENSIVE -> RISK
+# Band um die SMA (Hysterese), in Prozent der SMA, wirkt vor dem Whipsaw-Filter:
+#   Ausstieg, sobald Kurs <= SMA * (1 - band_ausstieg_pct / 100)
+#   Einstieg, sobald Kurs >  SMA * (1 + band_einstieg_pct / 100)
+# -0.7 / 2.0 heißt: raus, sobald der Kurs höchstens 0,7 % über der SMA schließt; wieder rein erst,
+# wenn er mehr als 2 % darüber schließt. 0 / 0 = kein Band (Kurs gegen SMA wie ursprünglich).
+# Ausstieg + Einstieg muss >= 0 sein (sonst lägen die Schwellen überkreuzt).
+# Herleitung: README, Abschnitt "Band um die SMA" (Plateau-Tests 2004-2026, Prüfung 1993-2004).
+band_ausstieg_pct = -0.7
+band_einstieg_pct = 2.0
