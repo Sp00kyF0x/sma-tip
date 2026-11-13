@@ -286,6 +286,30 @@ Band (Quadrat oben links, 21,8 %). Der Stern ist das gewählte Band −0,7/+2,0.
 (rund 130 bis 170 Wechsel, ohne Wechselkurs) liegt b=2 in 254 von 336 Bandkombinationen vorn, im Plateau-Bereich in
 95 % der Zellen (im Schnitt +0,5 PP), mit kleinerem Drawdown und weniger Wechseln.
 
+**Prüfung je Ereignis.** Die Jahreszerlegung ist grob, und benachbarte Zellen des Plateaus sind keine unabhängigen
+Belege. `analyse/ereignisse_band.py` zerlegt den Vorteil deshalb in einzelne Ereignisse: jede Phase, in der Band und
+Referenz verschieden positioniert sind. Gerechnet wird die reine SMA-Strategie 1993–2026 (2x in USD) ohne Steuern. Dann
+addieren sich die täglichen Log-Renditedifferenzen exakt, und der Zinseszins kann einzelne Phasen nicht aufblähen.
+
+![Band-Vorsprung über die Zeit und Beitrag je Ereignis, Fokus −0,7/+2,0 und Spanne des Plateau-Bereichs](docs/img/band_ereignisse.png)
+
+- **Viele Ereignisse, überwiegend positiv:** Für −0,7/+2,0 sind es 76 Ereignisse, davon 50 positiv (66 %). Bei einem
+  Münzwurf wäre das sehr unwahrscheinlich (Vorzeichentest p = 0,004). Ohne die 3 besten Ereignisse bleiben +0,9 von
+  +1,6 log-PP pro Jahr. Früherer Ausstieg und späterer Einstieg tragen beide bei.
+- **Die Höhe ist konzentriert:** Die besten 3 Ereignisse machen 44 % des Vorteils aus, die besten 5 rund zwei Drittel
+  (Herbst 2011, Oktober 2018, Juni 2008, August 2015, November 2026). Bis 2003 brachte das Band nichts; der Vorteil
+  entstand vor allem 2004–2013.
+- **Das Plateau ist kein zusätzlicher Beleg:** Alle 285 Zellen des Plateau-Bereichs (Ausstieg −0,4 bis −1,1, Einstieg
+  +1,5 bis +2,4) teilen sich nur 81 Ereignisse, und die großen davon gehen fast überall gleich aus. Die Stichprobe sind
+  also rund 75 Ereignisse, nicht Hunderte Zellen. Im Bereich bleibt der Vorteil in 92 % der Zellen auch ohne die
+  3 besten Ereignisse positiv; der Vorzeichentest ist in 66 % der Zellen signifikant.
+- **Feineres Raster, gleiche Wahl:** Auch mit Schritt 0,05 liegt −0,7/+2,0 im stärksten Bereich und nicht am Rand.
+  Ein Ausstieg tiefer als etwa −1,1 wird schwächer, ein Ausstieg genau an der SMA trägt kaum. Ein „besseres“ Feld aus
+  dem feinen Raster zu wählen, hieße auf denselben Daten nachzuoptimieren; der Wert bleibt deshalb unverändert.
+
+Die Richtung des Effekts ist damit belastbar, seine Höhe nicht: Im Hybrid wirkt das SMA-Signal nur, wenn TIP schon
+defensiv ist, die Zahl der Ereignisse ist dort noch kleiner.
+
 **Erwartung:** Realistisch ist der Durchschnitt des Plateaus, im Hybrid etwa +0,5 bis +1 PP CAGR, nicht der Bestwert.
 In Zeiträumen wie 1993–2004 kann davon wenig übrig bleiben. Benachbarte Schwellen unterscheiden sich zufällig um einige
 Zehntel, die genaue Lage innerhalb des Plateaus ist daher nicht wichtig.
@@ -303,6 +327,8 @@ und bleibt der Standard. Gefundene Vorteile hingen jeweils an wenigen Episoden (
 ### Grenzen
 
 - Die Ergebnisse hängen an wenigen Krisen; rund 22 Tagesgeld-Phasen in 22 Jahren sind eine kleine Stichprobe.
+- Auch der Vorteil des SMA-Bandes ist zu etwa der Hälfte von 3 bis 5 Ereignissen getragen (siehe
+  [Prüfung je Ereignis](#band-um-die-sma)); benachbarte Parameter teilen dieselben Ereignisse.
 - Die Signale tragen im Hybrid nachweislich zum Ergebnis bei (Zeitverschiebungs-Test), der Standard liegt aber nahe an
   einem Parametergipfel. Die Erwartungen für die Zukunft sollten vorsichtiger sein als die Historie.
 - Das Modell ist synthetisch; echte ETFs können durch Indexlücke, Swap-Kosten und Ausführungszeitpunkt abweichen.
@@ -338,6 +364,7 @@ stats/                             eigene Depot-CSVs für stats.py (privat, nich
 | `lib/ntfy_push.py` | Liest die Ausgabe von `canary.py` und schickt eine kurze Push-Nachricht über [ntfy](https://ntfy.sh): „RISK: <Ticker>“ oder „DEFENSIVE: Tagesgeld“. Ein Regimewechsel erhöht die Priorität. Läuft im Workflow. |
 | `analyse/kalibrierung_hebel.py` | **Kalibrierung** des synthetischen Hebel-Modells: schätzt aus echten ETFs (18MF.DE, DBPG.DE, SXR8.DE, SXR4.DE) gegen SPY die fixen Kosten, die Zinsdurchleitung, die Hebelwährung und den Xetra-Zeitversatz (FRED-Zinsen, Newey-West-Regression). Liefert die Kostenparameter für `backtest.py`; Ausgabe unter `ergebnisse/kalibrierung/`. |
 | `analyse/plateau_band.py` | Raster über Ausstiegs- und Einstiegsschwelle des Bandes mit Plateau- und Stabilitätskarten (Vorsprung ohne bestes Jahr, Bootstrap, Trefferquote); Hybrid oder reine SMA, Modell wie `backtest.py` oder USD ab 1993, mit oder ohne Steuern. Ausgabe unter `ergebnisse/plateau_band/`. |
+| `analyse/ereignisse_band.py` | Zerlegt den Band-Vorteil der reinen SMA-Strategie (ohne Steuern, exakt additiv in Log-Renditen) in einzelne Ereignisse: Zahl, Anteil positiver Ereignisse, Vorzeichentest, Vorsprung ohne die besten Ereignisse; dazu die gemeinsamen Ereignisse im Plateau-Bereich. Raster wie `plateau_band.py` (Standard Schritt 0,05). Ausgabe unter `ergebnisse/ereignisse_band/`. |
 | `.github/workflows/canary.yml` | GitHub-Actions-Workflow: installiert Pakete, führt `canary.py` aus, sendet den Push (`lib/ntfy_push.py`) und meldet Fehler. Wird extern gestartet (siehe Einrichtung). |
 | `requirements.txt` | Festgelegte Paketversionen. `yfinance` ist bewusst nur nach unten begrenzt, weil Yahoo seine Schnittstelle regelmäßig ändert. Python 3.11 oder neuer (für `strategie.toml`). |
 
